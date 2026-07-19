@@ -5,4 +5,9 @@ dist-package
 
 recordings
 snapshots
+runs
+taben
 build
+
+ai-engine/datasets/images/*
+ai-engine/datasets/labels/*
