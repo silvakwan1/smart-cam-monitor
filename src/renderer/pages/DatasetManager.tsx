@@ -1,119 +1,38 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { 
-  BrainCircuit, Trash2, FolderOpen, AlertTriangle, Play, RefreshCw, 
-  CheckCircle2, X, Image as ImageIcon, Cpu, Sparkles, Database, Plus, Eye
+  BrainCircuit, Trash2, AlertTriangle, Play, RefreshCw, 
+  X, Image as ImageIcon, Sparkles, Database, Eye
 } from 'lucide-react';
-
-interface DatasetImage {
-  name: string;
-  path: string;
-  url: string;
-  classId: number;
-  className: string;
-  size: number;
-  createdAt: number;
-}
-
-interface DatasetClass {
-  id: number;
-  name: string;
-  count: number;
-}
+import { useDataset } from '../hooks/useDataset';
+import { DatasetClass, DatasetImage } from '../../shared/types';
 
 export const DatasetManager: React.FC = () => {
-  const [classes, setClasses] = useState<DatasetClass[]>([]);
-  const [images, setImages] = useState<DatasetImage[]>([]);
-  const [selectedClassId, setSelectedClassId] = useState<number | null>(null); // null means "All"
-  
-  const [isLoading, setIsLoading] = useState(false);
-  const [trainingStatus, setTrainingStatus] = useState<string>('');
-  const [isTraining, setIsTraining] = useState(false);
-  
-  // Training parameters state
-  const [epochs, setEpochs] = useState<number>(50);
-  const [batchSize, setBatchSize] = useState<number>(8);
-  const [device, setDevice] = useState<string>('auto');
-
-  // Modal / Lightbox states
-  const [activeImage, setActiveImage] = useState<DatasetImage | null>(null);
-  const [deleteConfirmImage, setDeleteConfirmImage] = useState<DatasetImage | null>(null);
-  const [deleteConfirmClass, setDeleteConfirmClass] = useState<DatasetClass | null>(null);
-
-  const fetchDataset = async () => {
-    setIsLoading(true);
-    try {
-      const data = await window.electronAPI.getDatasetData();
-      setClasses(data.classes);
-      setImages(data.images);
-    } catch (err) {
-      console.error('Failed to load dataset details:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchDataset();
-  }, []);
-
-  const handleDeleteImage = async (image: DatasetImage) => {
-    try {
-      await window.electronAPI.deleteDatasetImage(image.path);
-      setDeleteConfirmImage(null);
-      await fetchDataset();
-    } catch (err) {
-      console.error('Failed to delete image:', err);
-      alert('Erro ao deletar imagem.');
-    }
-  };
-
-  const handleDeleteClass = async (cls: DatasetClass) => {
-    try {
-      await window.electronAPI.deleteDatasetClass(cls.id, cls.name);
-      setDeleteConfirmClass(null);
-      if (selectedClassId === cls.id) {
-        setSelectedClassId(null);
-      }
-      await fetchDataset();
-    } catch (err) {
-      console.error('Failed to delete class:', err);
-      alert('Erro ao excluir a classe.');
-    }
-  };
-
-  const handleStartTraining = async () => {
-    // Basic verification
-    const totalImages = images.length;
-    if (totalImages < 10) {
-      setTrainingStatus('Aviso: Recomenda-se pelo menos 10 imagens no dataset antes do treinamento.');
-    }
-
-    setIsTraining(true);
-    setTrainingStatus('Preparando ambiente e iniciando treinamento...');
-
-    try {
-      const result = await window.electronAPI.startDatasetTrainer({
-        epochs,
-        batch: batchSize,
-        device
-      });
-
-      if (result.success) {
-        setTrainingStatus('Treinador iniciado! Acompanhe o progresso na janela do terminal que foi aberta.');
-      } else {
-        setTrainingStatus(result.message || 'Falha ao iniciar o treinamento.');
-      }
-    } catch (err) {
-      setTrainingStatus(err instanceof Error ? err.message : 'Não foi possível iniciar o treinamento.');
-    } finally {
-      setIsTraining(false);
-    }
-  };
-
-  // Filtered images based on selection
-  const filteredImages = selectedClassId !== null
-    ? images.filter(img => img.classId === selectedClassId)
-    : images;
+  const {
+    classes,
+    images,
+    selectedClassId,
+    setSelectedClassId,
+    isLoading,
+    trainingStatus,
+    isTraining,
+    epochs,
+    setEpochs,
+    batchSize,
+    setBatchSize,
+    device,
+    setDevice,
+    activeImage,
+    setActiveImage,
+    deleteConfirmImage,
+    setDeleteConfirmImage,
+    deleteConfirmClass,
+    setDeleteConfirmClass,
+    filteredImages,
+    fetchDataset,
+    handleDeleteImage,
+    handleDeleteClass,
+    handleStartTraining
+  } = useDataset();
 
   // Format file size
   const formatSize = (bytes: number) => {
@@ -160,6 +79,7 @@ export const DatasetManager: React.FC = () => {
             <h3 className="text-lg font-bold font-mono text-slate-200">{images.length}</h3>
           </div>
         </div>
+
         <div className="glass-panel p-4 rounded-2xl border border-slate-800 flex items-center space-x-4 bg-slate-900/40">
           <div className="p-3 bg-brand-secondary/10 text-brand-secondary rounded-xl">
             <BrainCircuit className="h-5 w-5" />
@@ -516,7 +436,7 @@ export const DatasetManager: React.FC = () => {
               <AlertTriangle className="h-6 w-6 animate-bounce" />
               <h3 className="text-md font-bold text-slate-100">Excluir Classe do Dataset</h3>
             </div>
-            <p className="text-xs text-slate-400 leading-relaxed">
+            <div className="text-xs text-slate-400 leading-relaxed">
               ATENÇÃO! Você tem certeza que deseja excluir a classe <strong className="text-slate-100 capitalize">{deleteConfirmClass.name}</strong> (ID: {deleteConfirmClass.id})?
               <br /><br />
               Esta ação irá:
@@ -525,7 +445,7 @@ export const DatasetManager: React.FC = () => {
                 <li>Apagar TODAS as anotações do YOLO vinculadas.</li>
                 <li>Remover a classe do arquivo de configuração <span className="text-slate-200">dataset.yaml</span>.</li>
               </ul>
-            </p>
+            </div>
             <div className="flex justify-end space-x-2 pt-2">
               <button
                 onClick={() => setDeleteConfirmClass(null)}

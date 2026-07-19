@@ -66,3 +66,20 @@ export interface SystemStats {
   gpuUsage: number;
   fpsMap: Record<string, { capture: number; inference: number }>;
 }
+
+export interface DatasetImage {
+  name: string;
+  path: string;
+  url: string;
+  classId: number;
+  className: string;
+  size: number;
+  createdAt: number;
+}
+
+export interface DatasetClass {
+  id: number;
+  name: string;
+  count: number;
+}
+
