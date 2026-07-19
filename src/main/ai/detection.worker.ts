@@ -16,6 +16,17 @@ const TARGET_CLASSES: Record<number, 'person' | 'bicycle' | 'car' | 'motorcycle'
   16: 'dog'
 };
 
+const COCO_CLASSES = [
+  'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
+  'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+  'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+  'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle',
+  'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange',
+  'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed',
+  'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven',
+  'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+];
+
 // Simple NMS and IoU Helper functions
 function calculateIoU(box1: { x: number; y: number; width: number; height: number }, box2: { x: number; y: number; width: number; height: number }): number {
   const x1 = Math.max(box1.x, box2.x);
@@ -121,7 +132,7 @@ async function initialize(modelPath: string) {
   }
 }
 
-async function detect(width: number, height: number, buffer: Uint8Array) {
+async function detect(width: number, height: number, buffer: Uint8Array, customClasses?: Record<number, string>) {
   const startTime = Date.now();
 
   if (isSimulationMode || !session) {
@@ -130,7 +141,7 @@ async function detect(width: number, height: number, buffer: Uint8Array) {
     await new Promise((resolve) => setTimeout(resolve, Math.max(2, 10 - duration)));
     parentPort?.postMessage({
       type: 'detection_result',
-      detections: [], // Return empty array to avoid generating mock person/dog/car frames
+      detections: runSimulatedDetection(buffer),
       duration: Date.now() - startTime
     });
     return;
@@ -167,26 +178,65 @@ async function detect(width: number, height: number, buffer: Uint8Array) {
 
     const outputTensor = outputs[outputName];
     const outputData = outputTensor.data as Float32Array;
-    const outputDims = outputTensor.dims; // YOLOv8/11 output is [1, 84, 8400] or [1, 8400, 84]
+    const outputDims = outputTensor.dims; // YOLOv8/11 output is [1, 84, 8400] or [1, 8400, 84] or [1, 4+C, 8400]
 
     const candidates: any[] = [];
     const confidenceThreshold = 0.45;
 
-    // Detect format
+    // Detect format dynamically
     let numBoxes = 0;
     let numFeatures = 0;
     let isTransposed = false;
 
-    if (outputDims[1] === 84) {
-      numFeatures = outputDims[1]; // 4 bbox + 80 class scores
-      numBoxes = outputDims[2];    // 8400 anchors
+    const dim1 = outputDims[1];
+    const dim2 = outputDims[2];
+    if (dim1 < dim2) {
+      numFeatures = dim1;
+      numBoxes = dim2;
       isTransposed = false;
-    } else if (outputDims[2] === 84) {
-      numBoxes = outputDims[1];    // 8400 anchors
-      numFeatures = outputDims[2]; // 4 bbox + 80 class scores
-      isTransposed = true;
     } else {
-      throw new Error(`Unexpected output dimension shape: [${outputDims.join(', ')}]`);
+      numBoxes = dim1;
+      numFeatures = dim2;
+      isTransposed = true;
+    }
+
+    const numClasses = numFeatures - 4;
+
+    // Build model classes mapping
+    let modelClasses: Record<number, string> = {};
+    if (numClasses === 80) {
+      COCO_CLASSES.forEach((name, idx) => {
+        modelClasses[idx] = name;
+      });
+    } else if (customClasses) {
+      // Map sorted custom classes keys to sequential 0, 1, 2...
+      const sortedKeys = Object.keys(customClasses)
+        .map(Number)
+        .sort((a, b) => a - b);
+      
+      sortedKeys.forEach((key, idx) => {
+        modelClasses[idx] = customClasses[key];
+      });
+    } else {
+      for (let i = 0; i < numClasses; i++) {
+        modelClasses[i] = `class_${i}`;
+      }
+    }
+
+    // Build target classes name filter
+    const targetClassNames = new Set<string>();
+    
+    // Always search for classes in dataset.yaml
+    if (customClasses) {
+      Object.values(customClasses).forEach(name => targetClassNames.add(name.toLowerCase()));
+    }
+    
+    // Always include person as a target class
+    targetClassNames.add('person');
+
+    // If using the standard COCO model, also search for the other default COCO classes
+    if (numClasses === 80) {
+      Object.values(TARGET_CLASSES).forEach(name => targetClassNames.add(name.toLowerCase()));
     }
 
     for (let col = 0; col < numBoxes; col++) {
@@ -195,14 +245,12 @@ async function detect(width: number, height: number, buffer: Uint8Array) {
       let maxClassId = -1;
 
       if (!isTransposed) {
-        // Box coordinates
         cx = outputData[col];
         cy = outputData[numBoxes + col];
         w = outputData[numBoxes * 2 + col];
         h = outputData[numBoxes * 3 + col];
 
-        // Class scores start at index 4
-        for (let cl = 0; cl < 80; cl++) {
+        for (let cl = 0; cl < numClasses; cl++) {
           const score = outputData[numBoxes * (4 + cl) + col];
           if (score > maxClassScore) {
             maxClassScore = score;
@@ -210,13 +258,13 @@ async function detect(width: number, height: number, buffer: Uint8Array) {
           }
         }
       } else {
-        const offset = col * 84;
+        const offset = col * numFeatures;
         cx = outputData[offset];
         cy = outputData[offset + 1];
         w = outputData[offset + 2];
         h = outputData[offset + 3];
 
-        for (let cl = 0; cl < 80; cl++) {
+        for (let cl = 0; cl < numClasses; cl++) {
           const score = outputData[offset + 4 + cl];
           if (score > maxClassScore) {
             maxClassScore = score;
@@ -226,7 +274,8 @@ async function detect(width: number, height: number, buffer: Uint8Array) {
       }
 
       // Filter target classes and confidence
-      if (maxClassScore >= confidenceThreshold && TARGET_CLASSES[maxClassId] !== undefined) {
+      const label = modelClasses[maxClassId];
+      if (maxClassScore >= confidenceThreshold && label && targetClassNames.has(label.toLowerCase())) {
         // Normalize box from 640x640 coordinates to 0.0 - 1.0 relative coordinates
         const x = (cx - w / 2) / targetSize;
         const y = (cy - h / 2) / targetSize;
@@ -234,7 +283,7 @@ async function detect(width: number, height: number, buffer: Uint8Array) {
         const boxH = h / targetSize;
 
         candidates.push({
-          label: TARGET_CLASSES[maxClassId],
+          label: label,
           confidence: maxClassScore,
           box: {
             x: Math.max(0, Math.min(1, x)),
@@ -270,6 +319,6 @@ parentPort?.on('message', (msg) => {
   if (msg.type === 'init') {
     initialize(msg.modelPath);
   } else if (msg.type === 'detect') {
-    detect(msg.width, msg.height, new Uint8Array(msg.buffer));
+    detect(msg.width, msg.height, new Uint8Array(msg.buffer), msg.customClasses);
   }
 });

@@ -23,6 +23,7 @@ export interface IElectronAPI {
 
   getSettings: () => Promise<any>;
   saveSettings: (settings: any) => Promise<any>;
+  selectDirectory: (defaultPath?: string) => Promise<string | null>;
   listSystemDevices: () => Promise<string[]>;
   getRecordings: () => Promise<any[]>;
   openRecordingsFolder: () => Promise<{ success: boolean }>;

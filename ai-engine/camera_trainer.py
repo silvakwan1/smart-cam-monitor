@@ -12,6 +12,37 @@ import threading
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(SCRIPT_DIR)
 
+def get_base_dir():
+    if getattr(sys, 'frozen', False):
+        # 1. Try sys.executable
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        if os.path.exists(os.path.join(exe_dir, "datasets")) or os.path.exists(os.path.join(os.path.dirname(exe_dir), "datasets")):
+            if os.path.basename(exe_dir) == 'dist':
+                return os.path.abspath(os.path.join(exe_dir, '..'))
+            return exe_dir
+
+        # 2. Try sys.argv[0]
+        if sys.argv and sys.argv[0]:
+            argv_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            if os.path.exists(os.path.join(argv_dir, "datasets")) or os.path.exists(os.path.join(os.path.dirname(argv_dir), "datasets")):
+                if os.path.basename(argv_dir) == 'dist':
+                    return os.path.abspath(os.path.join(argv_dir, '..'))
+                return argv_dir
+
+        # 3. Try current working directory
+        cwd_dir = os.path.abspath(os.getcwd())
+        if os.path.exists(os.path.join(cwd_dir, "datasets")) or os.path.exists(os.path.join(os.path.dirname(cwd_dir), "datasets")):
+            if os.path.basename(cwd_dir) == 'dist':
+                return os.path.abspath(os.path.join(cwd_dir, '..'))
+            return cwd_dir
+
+        # Default fallback
+        if os.path.basename(exe_dir) == 'dist':
+            return os.path.abspath(os.path.join(exe_dir, '..'))
+        return exe_dir
+    else:
+        return SCRIPT_DIR
+
 HANDLE_SIZE = 12
 MIN_BOX_FRAC = 0.05
 
@@ -205,7 +236,7 @@ def update_dataset_yaml(yaml_path, class_name):
         names[class_id] = class_name_lower
         
         # Make sure train and val path definitions are absolute/correct
-        data['path'] = os.path.join(SCRIPT_DIR, 'datasets').replace('\\', '/')
+        data['path'] = os.path.join(get_base_dir(), 'datasets').replace('\\', '/')
         data['train'] = 'images/train'
         data['val'] = 'images/valid'
         
@@ -217,8 +248,104 @@ def update_dataset_yaml(yaml_path, class_name):
         
     return class_id
 
+
+def normalize_dataset_classes(yaml_path_str: str) -> None:
+    from pathlib import Path
+    yaml_path = Path(yaml_path_str)
+    if not yaml_path.exists():
+        return
+        
+    try:
+        with yaml_path.open("r", encoding="utf-8") as file:
+            data = yaml.safe_load(file) or {}
+    except Exception as exc:
+        print(f"[Trainer] Nao foi possivel ler o dataset.yaml para normalizacao: {exc}")
+        return
+
+    names = data.get("names")
+    if not names:
+        return
+
+    # Check if names keys are already sequential integers from 0 to len(names)-1
+    try:
+        keys = sorted([int(k) for k in names.keys()])
+        is_sequential = all(keys[i] == i for i in range(len(keys)))
+    except Exception as exc:
+        print(f"[Trainer] Erro ao analisar as chaves das classes: {exc}")
+        return
+    
+    if is_sequential:
+        print("[Trainer] Indices das classes ja estao sequenciais.")
+        return
+
+    print("[Trainer] Indices nao sequenciais detectados. Iniciando normalizacao...")
+    # Create mapping: old_id -> new_id
+    id_map = {old_id: new_id for new_id, old_id in enumerate(keys)}
+    
+    # Create new names dict
+    new_names = {new_id: names[old_id] for old_id, new_id in id_map.items()}
+    
+    # Update yaml data
+    data["names"] = new_names
+    
+    # Resolve paths
+    dataset_root = yaml_path.parent
+    if "path" in data:
+        p = Path(data["path"])
+        if p.is_absolute():
+            dataset_root = p
+        else:
+            dataset_root = (yaml_path.parent / p).resolve()
+            
+    train_label_dir = dataset_root / "labels" / "train"
+    val_label_dir = dataset_root / "labels" / "valid"
+    
+    # Helper to rewrite labels in a directory
+    def update_labels_in_dir(label_dir: Path):
+        if not label_dir.exists():
+            return
+        for txt_file in label_dir.glob("*.txt"):
+            try:
+                lines = txt_file.read_text(encoding="utf-8").splitlines()
+                updated_lines = []
+                changed = False
+                for line in lines:
+                    parts = line.strip().split()
+                    if parts:
+                        try:
+                            old_cid = int(parts[0])
+                            if old_cid in id_map:
+                                new_cid = id_map[old_cid]
+                                if old_cid != new_cid:
+                                    parts[0] = str(new_cid)
+                                    changed = True
+                            updated_lines.append(" ".join(parts))
+                        except ValueError:
+                            updated_lines.append(line)
+                    else:
+                        updated_lines.append(line)
+                if changed:
+                    txt_file.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+            except Exception as e:
+                print(f"[Trainer] Erro ao atualizar arquivo de label {txt_file.name}: {e}")
+
+    # Update labels
+    update_labels_in_dir(train_label_dir)
+    update_labels_in_dir(val_label_dir)
+
+    # Save updated yaml
+    try:
+        with yaml_path.open("w", encoding="utf-8") as file:
+            yaml.safe_dump(data, file, default_flow_style=False)
+        print(f"[Trainer] dataset.yaml e labels normalizados com sucesso. Novas classes: {new_names}")
+    except Exception as e:
+        print(f"[Trainer] Erro ao salvar dataset.yaml atualizado: {e}")
+
+
 def run_training(yaml_path, electron_onnx_dest):
     """Triggers the training run in a separate execution block."""
+    # Normalize class indices before training
+    normalize_dataset_classes(yaml_path)
     try:
         from ultralytics import YOLO
         import torch
@@ -235,7 +362,7 @@ def run_training(yaml_path, electron_onnx_dest):
     print(f"[*] Dispositivo de hardware selecionado: {device.upper() if isinstance(device, str) else 'GPU CUDA (0)'}")
     
     # Load base weights
-    base_weights = os.path.join(SCRIPT_DIR, "weights", "yolo11n.pt")
+    base_weights = os.path.join(get_base_dir(), "weights", "yolo11n.pt")
     if not os.path.exists(base_weights):
         # Fallback to yolov8n if v11 not locally downloaded, or ultralytics downloads it
         print(f"[*] Pesos base não encontrados em {base_weights}. Ultralytics baixará automaticamente.")
@@ -284,7 +411,7 @@ def main():
     print("="*60)
     
     # Create dataset directories
-    datasets_base = os.path.join(SCRIPT_DIR, "datasets")
+    datasets_base = os.path.join(get_base_dir(), "datasets")
     train_images = os.path.join(datasets_base, "images", "train")
     valid_images = os.path.join(datasets_base, "images", "valid")
     train_labels = os.path.join(datasets_base, "labels", "train")

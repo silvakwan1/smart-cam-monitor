@@ -30,6 +30,20 @@
       "filter": [
         "**/*"
       ]
+    },
+    {
+      "from": "ai-engine/datasets",
+      "to": "ai-engine/datasets",
+      "filter": [
+        "**/*"
+      ]
+    },
+    {
+      "from": "ai-engine/weights",
+      "to": "ai-engine/weights",
+      "filter": [
+        "**/*"
+      ]
     }
   ],
   "win": {

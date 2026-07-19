@@ -24,6 +24,7 @@ export class CameraManager {
   private prevMotionGrid: number[] | null = null;
   private isMotionActive = false;
   private motionTriggerTimeout: NodeJS.Timeout | null = null;
+  private lastMotionBox: { x: number; y: number; width: number; height: number } | null = null;
 
   // Intelligent recording state
   private recordingMode: RecordingMode = 'off';
@@ -49,13 +50,15 @@ export class CameraManager {
   private onStatusUpdate: (status: CameraStatus) => void;
   private onEventTriggered: (event: SystemEvent) => void;
   private getSettings: () => { recordingsFolder: string; snapshotsFolder: string };
+  private getCustomClasses: () => Record<number, string>;
 
   constructor(
     detector: YoloDetector,
     onFrameUpdate: (base64Frame: string, detections: Detection[], stats: { captureFps: number; inferenceFps: number }) => void,
     onStatusUpdate: (status: CameraStatus) => void,
     onEventTriggered: (event: SystemEvent) => void,
-    getSettings: () => { recordingsFolder: string; snapshotsFolder: string }
+    getSettings: () => { recordingsFolder: string; snapshotsFolder: string },
+    getCustomClasses: () => Record<number, string>
   ) {
     this.detector = detector;
     this.recorder = new Recorder();
@@ -63,6 +66,7 @@ export class CameraManager {
     this.onStatusUpdate = onStatusUpdate;
     this.onEventTriggered = onEventTriggered;
     this.getSettings = getSettings;
+    this.getCustomClasses = getCustomClasses;
   }
 
   async start(config: CameraConfig, recordingMode: RecordingMode = 'off'): Promise<void> {
@@ -175,10 +179,20 @@ export class CameraManager {
         const aiImg = img.resize({ width: 640, height: 640 });
         const aiBitmap = aiImg.toBitmap();
 
-        this.detector.detect(aiBitmap)
+        this.detector.detect(aiBitmap, this.getCustomClasses())
           .then((detections) => {
-            if (detections.length > 0 || this.activeDetections.length > 0) {
+            const activeDets = [...detections];
+            if (this.lastMotionBox) {
+              activeDets.push({
+                label: 'movimento',
+                confidence: 0.9,
+                box: this.lastMotionBox
+              });
+            }
+
+            if (activeDets.length > 0 || this.activeDetections.length > 0) {
               this.processAIResults(detections, frameBuffer);
+              this.activeDetections = activeDets;
             }
 
             // If video recording is active, save the detections with a relative timestamp
@@ -186,7 +200,7 @@ export class CameraManager {
               const relativeTime = (Date.now() - this.recordingStartTime) / 1000;
               this.currentRecordingDetections.push({
                 time: relativeTime,
-                detections: detections.map(d => ({
+                detections: activeDets.map(d => ({
                   label: d.label,
                   confidence: d.confidence,
                   // Clamp bounding box to screen boundaries [0.0, 1.0] to prevent crashes or overflows
@@ -307,26 +321,50 @@ export class CameraManager {
 
     if (!this.prevMotionGrid) {
       this.prevMotionGrid = grid;
+      this.lastMotionBox = null;
       return;
     }
 
     let changedCells = 0;
-    const cellThreshold = 15.0; // Minimum luminance change per block (0-255)
+    const cellThreshold = 10.0; // Minimum luminance change per block (0-255)
+    const changedIndices: number[] = [];
 
     for (let i = 0; i < 256; i++) {
       const diff = Math.abs(grid[i] - this.prevMotionGrid[i]);
       if (diff > cellThreshold) {
         changedCells++;
+        changedIndices.push(i);
       }
     }
 
-    // Motion is detected if at least 4 blocks change significantly (approx. 1.5% of the screen),
-    // but we ignore sudden global changes like camera exposure or flash of light (e.g. if > 85% of screen blocks change).
-    const hasMotion = changedCells >= 4 && changedCells < 220;
+    // Sensitive motion criteria: at least 2 changed cells (0.78% of the screen)
+    const hasMotion = changedCells >= 2 && changedCells < 220;
 
     this.prevMotionGrid = grid;
 
     if (hasMotion) {
+      // Calculate the bounding box enclosing all changed cells
+      let minCol = 16;
+      let maxCol = -1;
+      let minRow = 16;
+      let maxRow = -1;
+
+      for (const idx of changedIndices) {
+        const col = idx % 16;
+        const row = Math.floor(idx / 16);
+        if (col < minCol) minCol = col;
+        if (col > maxCol) maxCol = col;
+        if (row < minRow) minRow = row;
+        if (row > maxRow) maxRow = row;
+      }
+
+      this.lastMotionBox = {
+        x: minCol / 16,
+        y: minRow / 16,
+        width: (maxCol - minCol + 1) / 16,
+        height: (maxRow - minRow + 1) / 16
+      };
+
       if (!this.isMotionActive) {
         this.isMotionActive = true;
         this.emitEvent('motion_detected', 'Movimento detectado', undefined, frameBuffer);
@@ -342,6 +380,8 @@ export class CameraManager {
       this.motionTriggerTimeout = setTimeout(() => {
         this.isMotionActive = false;
       }, 3000); // 3 seconds timeout
+    } else {
+      this.lastMotionBox = null;
     }
   }
 
@@ -434,6 +474,7 @@ export class CameraManager {
       cameraName: this.activeConfig.name,
       timestamp: Date.now(),
       type,
+      description,
     };
 
     if (detection) {

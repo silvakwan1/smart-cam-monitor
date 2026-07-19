@@ -8,7 +8,91 @@
     <title>SmartCam Monitor - Inteligência Artificial Desktop</title>
   </head>
   <body class="h-full bg-slate-950 text-slate-100 antialiased overflow-hidden select-none">
-    <div id="root" class="h-full"></div>
+    <div id="root" class="h-full">
+      <!-- Splash Screen Placeholder while bundle initializes -->
+      <div style="
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        background-color: #030712;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        color: #f8fafc;
+        margin: 0;
+        padding: 0;
+        user-select: none;
+      ">
+        <!-- Pulse Logo Container -->
+        <div style="
+          position: relative;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 80px;
+          height: 80px;
+          background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(6, 182, 212, 0.15) 100%);
+          border: 1px solid rgba(139, 92, 246, 0.25);
+          border-radius: 24px;
+          margin-bottom: 24px;
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+          animation: pulse 2s infinite ease-in-out;
+        ">
+          <!-- Central Brain/Camera SVG -->
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 36px; height: 36px;">
+            <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+            <path d="M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/>
+            <circle cx="12" cy="12" r="2"/>
+          </svg>
+          <!-- Spinning Loading Ring -->
+          <div style="
+            position: absolute;
+            top: -6px;
+            left: -6px;
+            right: -6px;
+            bottom: -6px;
+            border: 2px solid transparent;
+            border-top-color: #8b5cf6;
+            border-radius: 30px;
+            animation: spin 1.5s infinite linear;
+          "></div>
+        </div>
+        
+        <!-- Loading Text details -->
+        <h1 style="
+          font-size: 15px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: #f1f5f9;
+          margin: 0 0 6px 0;
+          font-family: monospace;
+        ">SmartCam Monitor</h1>
+        <p style="
+          font-size: 10px;
+          font-weight: 500;
+          color: #475569;
+          margin: 0;
+        ">Carregando painel de monitoramento inteligente...</p>
+      </div>
+
+      <style>
+        @keyframes pulse {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 10px 25px -5px rgba(139, 92, 246, 0.15);
+          }
+          50% {
+            transform: scale(1.05);
+            box-shadow: 0 15px 30px -5px rgba(6, 182, 212, 0.35);
+          }
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      </style>
+    </div>
     <script type="module" src="/src/renderer/main.tsx"></script>
   </body>
 </html>

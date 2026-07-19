@@ -38,6 +38,9 @@ export const CameraView: React.FC = () => {
   // Class colors map
   const getClassStyle = (label: string) => {
     switch (label) {
+      case 'movimento':
+      case 'motion':
+        return { stroke: 'rgba(239, 68, 68, 1)', fill: 'rgba(239, 68, 68, 0.10)', textBg: '#ef4444' }; // Crimson Red for motion!
       case 'person':
         return { stroke: 'rgba(6, 182, 212, 1)', fill: 'rgba(6, 182, 212, 0.15)', textBg: '#06b6d4' }; // Cyan
       case 'car':

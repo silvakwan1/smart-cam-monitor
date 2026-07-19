@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Tv, Settings, Cpu, HardDrive, ShieldAlert, Video, Camera, BrainCircuit, X, Database } from 'lucide-react';
+import { Tv, Settings, Cpu, HardDrive, ShieldAlert, Video, Camera } from 'lucide-react';
 import { useCameraStore } from '../stores/cameraStore';
 
 export const Header: React.FC = () => {
@@ -8,51 +8,7 @@ export const Header: React.FC = () => {
   const activeCameraId = useCameraStore((state) => state.activeCameraId);
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const isFullscreen = useCameraStore((state) => state.isFullscreen);
-  const cameras = useCameraStore((state) => state.cameras);
-  const fetchCameras = useCameraStore((state) => state.fetchCameras);
 
-  // AI Trainer Modal states
-  const [isTrainerModalOpen, setIsTrainerModalOpen] = React.useState(false);
-  const [trainerClassName, setTrainerClassName] = React.useState('');
-  const [selectedCamId, setSelectedCamId] = React.useState('');
-  const [trainerStatus, setTrainerStatus] = React.useState('');
-  const [isStartingTrainer, setIsStartingTrainer] = React.useState(false);
-
-  // Fetch cameras list when trainer modal is opened
-  React.useEffect(() => {
-    if (isTrainerModalOpen) {
-      fetchCameras();
-    }
-  }, [isTrainerModalOpen]);
-
-  // Set default selected camera
-  React.useEffect(() => {
-    if (isTrainerModalOpen && cameras.length > 0 && !selectedCamId) {
-      const defCam = cameras.find(c => c.id === 'cam_webcam') || cameras[0];
-      setSelectedCamId(defCam.id);
-    }
-  }, [cameras, isTrainerModalOpen, selectedCamId]);
-
-  const handleStartTrainer = async () => {
-    const className = trainerClassName.trim();
-    if (!className) {
-      setTrainerStatus('Informe o objeto/classe antes de iniciar.');
-      return;
-    }
-
-    setIsStartingTrainer(true);
-    setTrainerStatus('');
-
-    try {
-      const selectedCam = cameras.find(c => c.id === selectedCamId);
-      const result = await window.electronAPI.startTrainer(className, selectedCam?.source);
-      setTrainerStatus(result.message || 'Treinador aberto. Use a janela da câmera para capturar.');
-    } catch (err) {
-      setTrainerStatus(err instanceof Error ? err.message : 'Não foi possível iniciar o treinador.');
-    } finally {
-      setIsStartingTrainer(false);
-    }
-  };
 
   if (isFullscreen) return null;
 
@@ -129,19 +85,6 @@ export const Header: React.FC = () => {
             <span>Capturas</span>
           </NavLink>
           <NavLink
-            to="/dataset"
-            className={({ isActive }) =>
-              `flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                isActive
-                  ? 'bg-gradient-to-r from-brand-primary/20 to-brand-secondary/20 text-brand-primary border border-brand-primary/30 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
-              }`
-            }
-          >
-            <Database className="h-4 w-4" />
-            <span>Dataset IA</span>
-          </NavLink>
-          <NavLink
             to="/settings"
             className={({ isActive }) =>
               `flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
@@ -154,19 +97,6 @@ export const Header: React.FC = () => {
             <Settings className="h-4 w-4" />
             <span>Configurações</span>
           </NavLink>
-
-          {/* AI Trainer Button */}
-          <button
-            onClick={() => setIsTrainerModalOpen(true)}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer ${
-              isTrainerModalOpen
-                ? 'bg-gradient-to-r from-brand-primary/20 to-brand-secondary/20 text-brand-primary border border-brand-primary/30 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
-            }`}
-          >
-            <BrainCircuit className="h-4 w-4" />
-            <span>Treinar IA</span>
-          </button>
         </nav>
 
         {/* Live System Diagnostics */}
@@ -216,69 +146,6 @@ export const Header: React.FC = () => {
         </div>
       </header>
 
-      {/* AI Trainer Modal Overlay */}
-      {isTrainerModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-200 p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col space-y-4 animate-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <BrainCircuit className="h-5 w-5 text-brand-primary animate-pulse" />
-                <h2 className="text-md font-bold text-slate-100">Treinar IA (Detector de Objetos)</h2>
-              </div>
-              <button
-                onClick={() => {
-                  setIsTrainerModalOpen(false);
-                  setTrainerStatus('');
-                }}
-                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-all cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="flex flex-col space-y-1.5">
-              <label className="text-xs text-slate-455 font-medium">Selecione a Câmera Origem</label>
-              <select
-                value={selectedCamId}
-                onChange={(e) => setSelectedCamId(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-850 rounded-xl px-3 py-2.5 text-sm text-slate-200 outline-none focus:border-brand-primary transition-all cursor-pointer"
-              >
-                <option value="" disabled>Selecione uma câmera...</option>
-                {cameras.map((cam) => (
-                  <option key={cam.id} value={cam.id}>
-                    {cam.name} ({cam.source})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex flex-col space-y-1.5">
-              <label className="text-xs text-slate-455 font-medium">Nome do Objeto ou Classe</label>
-              <input
-                value={trainerClassName}
-                onChange={(e) => setTrainerClassName(e.target.value)}
-                placeholder="Ex: capacete, copo, garrafa"
-                className="w-full bg-slate-950 border border-slate-850 rounded-xl px-3 py-2.5 text-sm text-slate-200 outline-none focus:border-brand-primary transition-all placeholder:text-slate-600"
-              />
-            </div>
-
-            <button
-              onClick={handleStartTrainer}
-              disabled={isStartingTrainer || !selectedCamId || !trainerClassName.trim()}
-              className="w-full flex items-center justify-center space-x-2 px-3 py-3 rounded-xl bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-semibold shadow-lg hover:brightness-110 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <BrainCircuit className="h-4 w-4" />
-              <span>{isStartingTrainer ? 'Iniciando Treinador...' : 'Iniciar Treinador IA'}</span>
-            </button>
-
-            {trainerStatus && (
-              <p className="text-xs text-slate-400 text-center leading-relaxed mt-2 p-2 bg-slate-950/50 border border-slate-850 rounded-lg">
-                {trainerStatus}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
     </>
   );
 };

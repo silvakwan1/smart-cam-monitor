@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain, protocol, net, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, net, shell, dialog } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import { Readable } from 'stream';
 import { ChildProcess, spawn } from 'child_process';
 import { CameraConfig, RecordingMode, SystemEvent, SystemStats } from '../shared/types';
 import { YoloDetector } from './ai/YoloDetector';
@@ -32,14 +33,30 @@ const SNAPSHOTS_DIR = path.join(PROJECT_DIR, 'snapshots');
 if (!fs.existsSync(RECORDINGS_DIR)) fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 if (!fs.existsSync(SNAPSHOTS_DIR)) fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
 
+function getAiEngineBaseDir() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'ai-engine');
+  }
+  return path.join(PROJECT_DIR, 'ai-engine');
+}
+
+function getDatasetsDir() {
+  if (generalSettings.datasetsFolder) {
+    return generalSettings.datasetsFolder;
+  }
+  return path.join(getAiEngineBaseDir(), 'datasets');
+}
+
 // Load initial databases
 let cameras: CameraConfig[] = [];
 let events: SystemEvent[] = [];
 let generalSettings = {
   modelPath: path.join(USER_DATA_PATH, 'yolo11n.onnx'),
-  recordingsFolder: RECORDINGS_DIR,
-  snapshotsFolder: SNAPSHOTS_DIR,
-  enableGpu: false
+  recordingsFolder: '',
+  snapshotsFolder: '',
+  datasetsFolder: '',
+  enableGpu: false,
+  needsConfiguration: true
 };
 
 function loadDatabases() {
@@ -70,7 +87,11 @@ function loadDatabases() {
   // 2. Events
   if (fs.existsSync(EVENTS_FILE)) {
     try {
-      events = JSON.parse(fs.readFileSync(EVENTS_FILE, 'utf-8'));
+      const loaded = JSON.parse(fs.readFileSync(EVENTS_FILE, 'utf-8'));
+      events = Array.isArray(loaded) ? loaded.map((evt: any) => ({
+        description: evt.description || `${evt.type === 'motion_detected' ? 'Movimento' : 'Pessoa'} detectada`,
+        ...evt
+      })) : [];
     } catch (e) {
       console.error('Error loading events.json', e);
     }
@@ -79,11 +100,33 @@ function loadDatabases() {
   // 3. Settings
   if (fs.existsSync(SETTINGS_FILE)) {
     try {
-      generalSettings = { ...generalSettings, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8')) };
+      const loaded = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+      generalSettings = { ...generalSettings, ...loaded };
+      // Compatibility with existing setups: if recordingsFolder is already defined and no needsConfiguration flag was present, set it to false.
+      if (loaded.recordingsFolder && loaded.needsConfiguration === undefined) {
+        generalSettings.needsConfiguration = false;
+      }
     } catch (e) {
       console.error('Error loading settings.json', e);
     }
   } else {
+    // Populate default folders on first run if they are not configured
+    try {
+      generalSettings.recordingsFolder = path.join(app.getPath('videos'), 'SmartCamRecordings');
+      generalSettings.snapshotsFolder = path.join(app.getPath('pictures'), 'SmartCamSnapshots');
+      generalSettings.datasetsFolder = path.join(app.getPath('documents'), 'SmartCamDatasets');
+      
+      // Ensure they exist
+      if (!fs.existsSync(generalSettings.recordingsFolder)) fs.mkdirSync(generalSettings.recordingsFolder, { recursive: true });
+      if (!fs.existsSync(generalSettings.snapshotsFolder)) fs.mkdirSync(generalSettings.snapshotsFolder, { recursive: true });
+      if (!fs.existsSync(generalSettings.datasetsFolder)) fs.mkdirSync(generalSettings.datasetsFolder, { recursive: true });
+    } catch (err) {
+      console.error('Failed to set up default system directories:', err);
+      // Fallback to project root directory
+      generalSettings.recordingsFolder = path.join(PROJECT_DIR, 'recordings');
+      generalSettings.snapshotsFolder = path.join(PROJECT_DIR, 'snapshots');
+      generalSettings.datasetsFolder = path.join(PROJECT_DIR, 'ai-engine', 'datasets');
+    }
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(generalSettings, null, 2));
   }
 }
@@ -198,7 +241,11 @@ function launchDatasetTrainerProcess(
   args: { epochs: number; batch: number; device: string; output: string }
 ): Promise<ChildProcess> {
   const trainerExecutablePath = getDatasetTrainerExecutablePath();
+  const aiEngineBaseDir = getAiEngineBaseDir();
   const trainerArgs = [
+    '--config', path.join(aiEngineBaseDir, 'datasets', 'dataset.yaml'),
+    '--weights', path.join(aiEngineBaseDir, 'weights', 'yolo11n.pt'),
+    '--runs-dir', path.join(PROJECT_DIR, 'runs'),
     '--epochs', args.epochs.toString(),
     '--batch', args.batch.toString(),
     '--device', args.device,
@@ -220,21 +267,36 @@ function launchDatasetTrainerProcess(
     }
 
     return new Promise((resolve, reject) => {
-      // Try py -3 first, then python, spawning inside a new CMD window
-      const child = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', 'py', '-3', scriptPath, ...trainerArgs], {
-        cwd: path.join(PROJECT_DIR, 'ai-engine'),
-        windowsHide: false
-      });
+      const venvPythonPath = path.join(PROJECT_DIR, '.venv', 'Scripts', 'python.exe');
+      const hasVenv = fs.existsSync(venvPythonPath);
 
-      child.once('spawn', () => resolve(child));
-      child.once('error', () => {
-        const fallbackChild = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', 'python', scriptPath, ...trainerArgs], {
+      const runInCmd = (command: string, extraArgs: string[]) => {
+        return spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', command, ...extraArgs], {
           cwd: path.join(PROJECT_DIR, 'ai-engine'),
           windowsHide: false
         });
-        fallbackChild.once('spawn', () => resolve(fallbackChild));
-        fallbackChild.once('error', reject);
-      });
+      };
+
+      const candidates: { command: string; args: string[] }[] = [];
+      if (hasVenv) {
+        candidates.push({ command: venvPythonPath, args: [scriptPath, ...trainerArgs] });
+      }
+      candidates.push({ command: 'py', args: ['-3', scriptPath, ...trainerArgs] });
+      candidates.push({ command: 'python', args: [scriptPath, ...trainerArgs] });
+
+      const tryLaunch = (index: number) => {
+        const candidate = candidates[index];
+        if (!candidate) {
+          reject(new Error('Python virtual environment or global interpreter not found.'));
+          return;
+        }
+
+        const child = runInCmd(candidate.command, candidate.args);
+        child.once('spawn', () => resolve(child));
+        child.once('error', () => tryLaunch(index + 1));
+      };
+
+      tryLaunch(0);
     });
   }
 
@@ -249,12 +311,32 @@ function launchDatasetTrainerProcess(
     });
   }
 
+  const venvPythonPath = path.join(PROJECT_DIR, '.venv', 'bin', 'python');
+  const hasVenv = fs.existsSync(venvPythonPath);
+
+  const baseArgs = [scriptPath, ...trainerArgs];
+  const candidates: { command: string; args: string[] }[] = [];
+  if (hasVenv) {
+    candidates.push({ command: venvPythonPath, args: baseArgs });
+  }
+  candidates.push({ command: 'python3', args: baseArgs });
+  candidates.push({ command: 'python', args: baseArgs });
+
   return new Promise((resolve, reject) => {
-    const child = spawn('python3', [scriptPath, ...trainerArgs], {
-      cwd: path.join(PROJECT_DIR, 'ai-engine')
-    });
-    child.once('spawn', () => resolve(child));
-    child.once('error', reject);
+    const tryLaunch = (index: number) => {
+      const candidate = candidates[index];
+      if (!candidate) {
+        reject(new Error('Python interpreter not found.'));
+        return;
+      }
+      const child = spawn(candidate.command, candidate.args, {
+        cwd: path.join(PROJECT_DIR, 'ai-engine')
+      });
+      child.once('spawn', () => resolve(child));
+      child.once('error', () => tryLaunch(index + 1));
+    };
+
+    tryLaunch(0);
   });
 }
 
@@ -280,15 +362,23 @@ function launchTrainerProcess(scriptPath: string, className: string, cameraSourc
   }
 
   const baseArgs = [scriptPath, ...trainerArgs];
-  const candidates = process.platform === 'win32'
-    ? [
-        { command: 'py', args: ['-3', ...baseArgs] },
-        { command: 'python', args: baseArgs }
-      ]
-    : [
-        { command: 'python3', args: baseArgs },
-        { command: 'python', args: baseArgs }
-      ];
+  const venvPythonPath = process.platform === 'win32'
+    ? path.join(PROJECT_DIR, '.venv', 'Scripts', 'python.exe')
+    : path.join(PROJECT_DIR, '.venv', 'bin', 'python');
+  const hasVenv = fs.existsSync(venvPythonPath);
+
+  const candidates: { command: string; args: string[] }[] = [];
+  if (hasVenv) {
+    candidates.push({ command: venvPythonPath, args: baseArgs });
+  }
+
+  if (process.platform === 'win32') {
+    candidates.push({ command: 'py', args: ['-3', ...baseArgs] });
+    candidates.push({ command: 'python', args: baseArgs });
+  } else {
+    candidates.push({ command: 'python3', args: baseArgs });
+    candidates.push({ command: 'python', args: baseArgs });
+  }
 
   return new Promise((resolve, reject) => {
     const tryLaunch = (index: number) => {
@@ -320,6 +410,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 768,
     title: 'SmartCam Monitor - Painel Inteligente',
+    backgroundColor: '#030712',
     icon: !app.isPackaged 
       ? path.join(__dirname, '../../build/icon.png')
       : path.join(__dirname, '../renderer/logo.png'),
@@ -404,8 +495,62 @@ app.whenReady().then(async () => {
       }
     }
     
-    const targetUrl = 'file:///' + decodedPath;
-    return net.fetch(targetUrl);
+    const normalizedPath = path.normalize(decodedPath);
+    
+    if (!fs.existsSync(normalizedPath)) {
+      return new Response('File not found', { status: 404 });
+    }
+    
+    try {
+      const stats = fs.statSync(normalizedPath);
+      const fileSize = stats.size;
+      const range = request.headers.get('range');
+      
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        
+        if (start >= fileSize || end >= fileSize) {
+          return new Response('Requested range not satisfiable', {
+            status: 416,
+            headers: {
+              'Content-Range': `bytes */${fileSize}`,
+              'Accept-Ranges': 'bytes'
+            }
+          });
+        }
+        
+        const chunksize = (end - start) + 1;
+        const fileStream = fs.createReadStream(normalizedPath, { start, end });
+        const webStream = Readable.toWeb(fileStream);
+        
+        return new Response(webStream as any, {
+          status: 206,
+          headers: {
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunksize.toString(),
+            'Content-Type': 'video/mp4'
+          }
+        });
+      } else {
+        const fileStream = fs.createReadStream(normalizedPath);
+        const webStream = Readable.toWeb(fileStream);
+        
+        return new Response(webStream as any, {
+          status: 200,
+          headers: {
+            'Accept-Ranges': 'bytes',
+            'Content-Length': fileSize.toString(),
+            'Content-Type': 'video/mp4'
+          }
+        });
+      }
+    } catch (err: any) {
+      console.error('[Protocol Handler] Error reading file:', err);
+      return new Response('Internal Server Error', { status: 500 });
+    }
   });
 
   loadDatabases();
@@ -433,7 +578,14 @@ app.whenReady().then(async () => {
       mainWindow?.webContents.send('system:event', event);
     },
     // Settings getter
-    () => generalSettings
+    () => generalSettings,
+    // Custom classes getter
+    () => {
+      const datasetsDir = getDatasetsDir();
+      const yamlPath = path.join(datasetsDir, 'dataset.yaml');
+      const { names } = parseDatasetYaml(yamlPath);
+      return names;
+    }
   );
 
   createWindow();
@@ -553,7 +705,7 @@ ipcMain.handle('trainer:start', async (event, className: string, cameraSource?: 
 });
 
 ipcMain.handle('dataset:get-data', async () => {
-  const datasetsDir = path.join(PROJECT_DIR, 'ai-engine', 'datasets');
+  const datasetsDir = getDatasetsDir();
   const yamlPath = path.join(datasetsDir, 'dataset.yaml');
   const { names } = parseDatasetYaml(yamlPath);
 
@@ -652,7 +804,7 @@ ipcMain.handle('dataset:get-data', async () => {
 ipcMain.handle('dataset:delete-image', async (event, imagePath: string) => {
   try {
     const filename = path.basename(imagePath);
-    const datasetsDir = path.join(PROJECT_DIR, 'ai-engine', 'datasets');
+    const datasetsDir = getDatasetsDir();
 
     // Resolve all 4 corresponding file paths
     const trainImg = path.join(datasetsDir, 'images', 'train', filename);
@@ -677,7 +829,7 @@ ipcMain.handle('dataset:delete-image', async (event, imagePath: string) => {
 
 ipcMain.handle('dataset:delete-class', async (event, classId: number, className: string) => {
   try {
-    const datasetsDir = path.join(PROJECT_DIR, 'ai-engine', 'datasets');
+    const datasetsDir = getDatasetsDir();
     const yamlPath = path.join(datasetsDir, 'dataset.yaml');
 
     // 1. Delete matching images and labels
@@ -790,6 +942,22 @@ ipcMain.handle('settings:get', () => {
 ipcMain.handle('settings:save', (event, newSettings: any) => {
   const oldModelPath = generalSettings.modelPath;
   generalSettings = { ...generalSettings, ...newSettings };
+  
+  // Ensure the configured directories exist
+  try {
+    if (generalSettings.recordingsFolder && !fs.existsSync(generalSettings.recordingsFolder)) {
+      fs.mkdirSync(generalSettings.recordingsFolder, { recursive: true });
+    }
+    if (generalSettings.snapshotsFolder && !fs.existsSync(generalSettings.snapshotsFolder)) {
+      fs.mkdirSync(generalSettings.snapshotsFolder, { recursive: true });
+    }
+    if (generalSettings.datasetsFolder && !fs.existsSync(generalSettings.datasetsFolder)) {
+      fs.mkdirSync(generalSettings.datasetsFolder, { recursive: true });
+    }
+  } catch (err) {
+    console.error('Failed to create settings directories on save:', err);
+  }
+
   saveSettingsDb();
 
   // If model path was modified, re-initialize detector asynchronously
@@ -802,6 +970,18 @@ ipcMain.handle('settings:save', (event, newSettings: any) => {
   }
 
   return generalSettings;
+});
+
+ipcMain.handle('settings:select-directory', async (event, defaultPath?: string) => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: defaultPath || undefined
+  });
+  if (!result.canceled && result.filePaths.length > 0) {
+    return result.filePaths[0];
+  }
+  return null;
 });
 
 // 5. System Devices Listing
@@ -1052,75 +1232,173 @@ async function runVideoAiScan(filePath: string, durationSec: number, window: Bro
   let bufferAccumulator = Buffer.alloc(0);
   let frameIndex = 0;
   const detectionsList: any[] = [];
+  let stderr = '';
 
-  // Sequential stream reading process to enforce backpressure and cap memory usage at ~1.6MB per frame
-  (async () => {
-    try {
-      for await (const chunk of proc.stdout) {
-        bufferAccumulator = Buffer.concat([bufferAccumulator, chunk]);
-        while (bufferAccumulator.length >= frameSize) {
-          const frameBuffer = bufferAccumulator.subarray(0, frameSize);
-          bufferAccumulator = bufferAccumulator.subarray(frameSize);
+  proc.stderr?.on('data', (data) => {
+    stderr += data.toString();
+  });
 
-          const timestamp = frameIndex / scanFps;
-          if (detector) {
-            try {
-              const detections = await detector.detect(frameBuffer);
-              if (detections && detections.length > 0) {
-                detectionsList.push({
-                  time: timestamp,
-                  detections: detections.map(d => ({
-                    label: d.label,
-                    confidence: d.confidence,
-                    box: d.box
-                  }))
-                });
-              }
-            } catch (err) {
-              console.error('[AI Scan] Detection error:', err);
-            }
-          }
-
-          frameIndex++;
-          const progress = Math.min(99, Math.round((frameIndex / totalFrames) * 100));
-          window?.webContents.send('recordings:ai-progress', { filePath, progress });
-        }
-      }
-    } catch (err) {
-      console.error('[AI Scan] Stream read error:', err);
-    }
-  })();
-
-  return new Promise<{ success: boolean }>((resolve, reject) => {
-    let stderr = '';
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString();
+  const processClosePromise = new Promise<number | null>((resolve, reject) => {
+    proc.on('close', (code) => {
+      resolve(code);
     });
-
-    proc.on('close', async (code) => {
-      activeAiScans.delete(filePath);
-      if (code === 0 || code === null) {
-        const jsonPath = filePath.replace(/\.mp4$/i, '.json');
-        try {
-          await fs.promises.writeFile(jsonPath, JSON.stringify(detectionsList, null, 2));
-          console.log(`[AI Scan] Scan complete, saved detections to: ${jsonPath}`);
-          window?.webContents.send('recordings:ai-progress', { filePath, progress: 100 });
-          resolve({ success: true });
-        } catch (e) {
-          console.error('[AI Scan] Failed to save JSON:', e);
-          reject(e);
-        }
-      } else {
-        console.error('[AI Scan] FFmpeg error output:', stderr);
-        reject(new Error(`FFmpeg exited with code ${code}`));
-      }
-    });
-
     proc.on('error', (err) => {
-      activeAiScans.delete(filePath);
       reject(err);
     });
   });
+
+  let prevMotionGrid: number[] | null = null;
+  const cellThreshold = 10.0; // sensitive motion threshold
+
+  try {
+    // Sequential stream reading process to enforce backpressure and cap memory usage at ~1.6MB per frame
+    for await (const chunk of proc.stdout) {
+      bufferAccumulator = Buffer.concat([bufferAccumulator, chunk]);
+      while (bufferAccumulator.length >= frameSize) {
+        const frameBuffer = bufferAccumulator.subarray(0, frameSize);
+        bufferAccumulator = bufferAccumulator.subarray(frameSize);
+
+        const timestamp = frameIndex / scanFps;
+
+        // 1. Downsample the 640x640 frame to a 16x16 grid for motion detection
+        const grid = new Array(256).fill(0);
+        const blockSize = 40; // 640 / 16
+        const numPixelsPerBlock = blockSize * blockSize;
+
+        for (let r = 0; r < 16; r++) {
+          for (let c = 0; c < 16; c++) {
+            let sumLuminance = 0;
+            const startX = c * blockSize;
+            const startY = r * blockSize;
+
+            for (let dy = 0; dy < blockSize; dy++) {
+              const y = startY + dy;
+              const rowOffset = y * 640 * 4;
+              for (let dx = 0; dx < blockSize; dx++) {
+                const x = startX + dx;
+                const pxIdx = rowOffset + x * 4;
+                
+                const red = frameBuffer[pxIdx];
+                const green = frameBuffer[pxIdx + 1];
+                const blue = frameBuffer[pxIdx + 2];
+                
+                const luminance = 0.299 * red + 0.587 * green + 0.114 * blue;
+                sumLuminance += luminance;
+              }
+            }
+            grid[r * 16 + c] = sumLuminance / numPixelsPerBlock;
+          }
+        }
+
+        let hasMotion = false;
+        let motionBox = null;
+
+        if (prevMotionGrid) {
+          let changedCells = 0;
+          const changedIndices: number[] = [];
+
+          for (let i = 0; i < 256; i++) {
+            const diff = Math.abs(grid[i] - prevMotionGrid[i]);
+            if (diff > cellThreshold) {
+              changedCells++;
+              changedIndices.push(i);
+            }
+          }
+
+          // Sensitive detection: 2 changed cells (0.78% of screen) triggers motion
+          hasMotion = changedCells >= 2 && changedCells < 220;
+
+          if (hasMotion) {
+            let minCol = 16;
+            let maxCol = -1;
+            let minRow = 16;
+            let maxRow = -1;
+
+            for (const idx of changedIndices) {
+              const col = idx % 16;
+              const row = Math.floor(idx / 16);
+              if (col < minCol) minCol = col;
+              if (col > maxCol) maxCol = col;
+              if (row < minRow) minRow = row;
+              if (row > maxRow) maxRow = row;
+            }
+
+            motionBox = {
+              x: minCol / 16,
+              y: minRow / 16,
+              width: (maxCol - minCol + 1) / 16,
+              height: (maxRow - minRow + 1) / 16
+            };
+          }
+        }
+
+        prevMotionGrid = grid;
+
+        // 2. Perform AI object detection
+        const frameDetections = [];
+        if (detector) {
+          try {
+            const datasetsDir = getDatasetsDir();
+            const yamlPath = path.join(datasetsDir, 'dataset.yaml');
+            const { names: customClasses } = parseDatasetYaml(yamlPath);
+
+            const detections = await detector.detect(frameBuffer, customClasses);
+            if (detections && detections.length > 0) {
+              frameDetections.push(...detections.map(d => ({
+                label: d.label,
+                confidence: d.confidence,
+                box: d.box
+              })));
+            }
+          } catch (err) {
+            console.error('[AI Scan] Detection error:', err);
+          }
+        }
+
+        // 3. Integrate motion detection if present
+        if (hasMotion && motionBox) {
+          frameDetections.push({
+            label: 'movimento',
+            confidence: 0.9,
+            box: motionBox
+          });
+        }
+
+        if (frameDetections.length > 0) {
+          detectionsList.push({
+            time: timestamp,
+            detections: frameDetections
+          });
+        }
+
+        frameIndex++;
+        const progress = Math.min(99, Math.round((frameIndex / totalFrames) * 100));
+        window?.webContents.send('recordings:ai-progress', { filePath, progress });
+      }
+    }
+
+    // Wait for the FFmpeg process to close to retrieve final exit code
+    const code = await processClosePromise;
+
+    activeAiScans.delete(filePath);
+
+    if (code === 0 || code === null) {
+      const jsonPath = filePath.replace(/\.mp4$/i, '.json');
+      await fs.promises.writeFile(jsonPath, JSON.stringify(detectionsList, null, 2));
+      console.log(`[AI Scan] Scan complete, saved detections to: ${jsonPath}`);
+      window?.webContents.send('recordings:ai-progress', { filePath, progress: 100 });
+      return { success: true };
+    } else {
+      console.error('[AI Scan] FFmpeg error output:', stderr);
+      throw new Error(`FFmpeg exited with code ${code}`);
+    }
+  } catch (err: any) {
+    activeAiScans.delete(filePath);
+    try {
+      proc.kill();
+    } catch {}
+    throw err;
+  }
 }
 
 ipcMain.handle('recordings:process-ai', async (event, filePath: string, duration: number) => {

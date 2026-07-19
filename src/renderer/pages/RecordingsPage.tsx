@@ -210,17 +210,40 @@ export const RecordingsPage: React.FC = () => {
     if (!showDetections || videoDetections.length === 0) return;
 
     const video = videoRef.current;
+
+    // Symmetrically size the canvas CSS layout dimensions to match the video's actual display size
+    const displayWidth = video.clientWidth;
+    const displayHeight = video.clientHeight;
+    canvas.style.width = `${displayWidth}px`;
+    canvas.style.height = `${displayHeight}px`;
+
+    // Rescale the internal drawing resolution to match native video frame dimensions
     if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 480;
     }
 
-    // Find closest frame to the playhead (+/- 0.4 seconds window)
-    const activeFrame = videoDetections.reduce((best, item) => {
-      const diffItem = Math.abs(item.time - currentTime);
-      const diffBest = best ? Math.abs(best.time - currentTime) : Infinity;
-      return diffItem < diffBest ? item : best;
-    }, null);
+    // Binary search to find the closest frame in O(log N)
+    const findClosestFrame = (detections: any[], targetTime: number) => {
+      if (detections.length === 0) return null;
+      let left = 0;
+      let right = detections.length - 1;
+      
+      while (left < right - 1) {
+        const mid = Math.floor((left + right) / 2);
+        if (detections[mid].time < targetTime) {
+          left = mid;
+        } else {
+          right = mid;
+        }
+      }
+      
+      const leftDiff = Math.abs(detections[left].time - targetTime);
+      const rightDiff = Math.abs(detections[right].time - targetTime);
+      return leftDiff < rightDiff ? detections[left] : detections[right];
+    };
+
+    const activeFrame = findClosestFrame(videoDetections, currentTime);
 
     if (!activeFrame || Math.abs(activeFrame.time - currentTime) > 0.4) {
       return;
@@ -230,6 +253,9 @@ export const RecordingsPage: React.FC = () => {
       // Get colors based on class label
       const getClassStyle = (label: string) => {
         switch (label) {
+          case 'movimento':
+          case 'motion':
+            return { stroke: 'rgba(239, 68, 68, 1)', fill: 'rgba(239, 68, 68, 0.10)', textBg: '#ef4444' }; // Crimson Red for motion!
           case 'person':
             return { stroke: 'rgba(6, 182, 212, 1)', fill: 'rgba(6, 182, 212, 0.15)', textBg: '#06b6d4' }; // Cyan
           case 'car':
@@ -869,7 +895,7 @@ export const RecordingsPage: React.FC = () => {
                 {/* Detections Canvas Bounding Box Overlay */}
                 <canvas
                   ref={canvasRef}
-                  className="absolute inset-0 w-full h-full pointer-events-none"
+                  className="absolute pointer-events-none"
                 />
               </div>
               

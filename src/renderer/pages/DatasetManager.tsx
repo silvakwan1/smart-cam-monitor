@@ -405,16 +405,16 @@ export const DatasetManager: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div className="flex-1 overflow-y-auto pr-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4 event-scrollbar content-start">
+            <div className="flex-1 overflow-y-auto pr-1 grid grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-3 event-scrollbar content-start">
               {filteredImages.map((img) => (
                 <div
                   key={img.path}
-                  className="group relative bg-slate-950/80 border border-slate-850 rounded-xl overflow-hidden shadow-md hover:border-slate-700 transition-all duration-200"
+                  className="group relative w-20 h-28 bg-slate-950/80 border border-slate-850 rounded-xl overflow-hidden shadow-md hover:border-slate-700 transition-all duration-200 flex flex-col shrink-0"
                 >
-                  {/* Thumbnail */}
+                  {/* Thumbnail (Square 80x80) */}
                   <div 
                     onClick={() => setActiveImage(img)}
-                    className="aspect-video w-full bg-slate-900 flex items-center justify-center overflow-hidden cursor-pointer relative"
+                    className="w-20 h-20 bg-slate-900 flex items-center justify-center overflow-hidden cursor-pointer relative border-b border-slate-850 shrink-0"
                   >
                     <img
                       src={img.url}
@@ -423,30 +423,22 @@ export const DatasetManager: React.FC = () => {
                       loading="lazy"
                     />
                     <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
-                      <Eye className="h-5 w-5 text-white drop-shadow" />
+                      <Eye className="h-4 w-4 text-white drop-shadow" />
                     </div>
                   </div>
 
-                  {/* Metadata & Actions */}
-                  <div className="p-2 flex flex-col space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded capitalize font-semibold max-w-[80px] truncate">
-                        {img.className}
-                      </span>
-                      <button
-                        onClick={() => setDeleteConfirmImage(img)}
-                        className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-900 transition-all cursor-pointer"
-                        title="Deletar amostra de imagem"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </div>
-                    
-                    <div className="flex flex-col text-[9px] text-slate-500 font-mono">
-                      <span className="truncate" title={img.name}>{img.name}</span>
-                      <span>{formatSize(img.size)}</span>
-                      <span>{new Date(img.createdAt).toLocaleDateString('pt-BR')}</span>
-                    </div>
+                  {/* Metadata & Actions (Compact Footer) */}
+                  <div className="p-1 flex items-center justify-between bg-slate-900/40 flex-1 min-h-0">
+                    <span className="text-[9px] text-slate-400 capitalize truncate max-w-[45px] font-semibold pl-0.5" title={img.className}>
+                      {img.className}
+                    </span>
+                    <button
+                      onClick={() => setDeleteConfirmImage(img)}
+                      className="p-0.5 rounded text-slate-500 hover:text-rose-450 hover:bg-slate-950 transition-all cursor-pointer flex items-center justify-center"
+                      title="Deletar amostra de imagem"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
                   </div>
                 </div>
               ))}

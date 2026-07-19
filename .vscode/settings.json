@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "c:/Users/silva/OneDrive/Documentos/can/.venv/Scripts/python.exe",
+  "python.analysis.extraPaths": [
+    "c:/Users/silva/OneDrive/Documentos/can/ai-engine",
+    "c:/Users/silva/OneDrive/Documentos/can/.venv/Lib/site-packages"
+  ]
+}

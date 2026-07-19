@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Application configurations
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings: any) => ipcRenderer.invoke('settings:save', settings),
+  selectDirectory: (defaultPath?: string) => ipcRenderer.invoke('settings:select-directory', defaultPath),
   listSystemDevices: () => ipcRenderer.invoke('system:list-devices'),
 
   // Recordings file management

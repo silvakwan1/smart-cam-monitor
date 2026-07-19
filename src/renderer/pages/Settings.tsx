@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useCameraStore } from '../stores/cameraStore';
 import { CameraConfig, CameraType } from '../../shared/types';
-import { Plus, Trash2, Edit, Save, ToggleLeft, ToggleRight, FolderOpen, RefreshCw, Server, Cpu } from 'lucide-react';
+import { Plus, Trash2, Edit, Save, ToggleLeft, ToggleRight, FolderOpen, RefreshCw, Server, Cpu, BrainCircuit, X, Database } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const cameras = useCameraStore((state) => state.cameras);
@@ -14,7 +15,9 @@ export const Settings: React.FC = () => {
     modelPath: '',
     recordingsFolder: '',
     snapshotsFolder: '',
-    enableGpu: false
+    datasetsFolder: '',
+    enableGpu: false,
+    needsConfiguration: false
   });
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -103,6 +106,53 @@ export const Settings: React.FC = () => {
       resetForm();
     } catch (err) {
       alert('Erro ao salvar câmera');
+    }
+  };
+
+  const handleSelectFolder = async (key: 'recordingsFolder' | 'snapshotsFolder' | 'datasetsFolder') => {
+    try {
+      const selected = await window.electronAPI.selectDirectory(appSettings[key]);
+      if (selected) {
+        setAppSettings((prev) => ({ ...prev, [key]: selected }));
+      }
+    } catch (err) {
+      console.error('Failed to select directory:', err);
+    }
+  };
+
+  // AI Trainer Modal states
+  const [isTrainerModalOpen, setIsTrainerModalOpen] = useState(false);
+  const [trainerClassName, setTrainerClassName] = useState('');
+  const [selectedCamId, setSelectedCamId] = useState('');
+  const [trainerStatus, setTrainerStatus] = useState('');
+  const [isStartingTrainer, setIsStartingTrainer] = useState(false);
+
+  // Set default selected camera
+  useEffect(() => {
+    if (isTrainerModalOpen && cameras.length > 0 && !selectedCamId) {
+      const defCam = cameras.find(c => c.id === 'cam_webcam') || cameras[0];
+      setSelectedCamId(defCam.id);
+    }
+  }, [cameras, isTrainerModalOpen, selectedCamId]);
+
+  const handleStartTrainer = async () => {
+    const className = trainerClassName.trim();
+    if (!className) {
+      setTrainerStatus('Informe o objeto/classe antes de iniciar.');
+      return;
+    }
+
+    setIsStartingTrainer(true);
+    setTrainerStatus('');
+
+    try {
+      const selectedCam = cameras.find(c => c.id === selectedCamId);
+      const result = await window.electronAPI.startTrainer(className, selectedCam?.source);
+      setTrainerStatus(result.message || 'Treinador aberto. Use a janela da câmera para capturar.');
+    } catch (err) {
+      setTrainerStatus(err instanceof Error ? err.message : 'Não foi possível iniciar o treinador.');
+    } finally {
+      setIsStartingTrainer(false);
     }
   };
 
@@ -209,23 +259,64 @@ export const Settings: React.FC = () => {
               {/* Recordings Folder Input */}
               <div className="flex flex-col space-y-1.5">
                 <label className="text-xs text-slate-400 font-medium">Diretório de Gravações (MP4)</label>
-                <input
-                  type="text"
-                  value={appSettings.recordingsFolder}
-                  onChange={(e) => setAppSettings({ ...appSettings, recordingsFolder: e.target.value })}
-                  className="w-full bg-slate-900 border border-slate-850 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 outline-none focus:border-brand-primary"
-                />
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={appSettings.recordingsFolder}
+                    onChange={(e) => setAppSettings({ ...appSettings, recordingsFolder: e.target.value })}
+                    className="flex-1 bg-slate-900 border border-slate-850 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 outline-none focus:border-brand-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleSelectFolder('recordingsFolder')}
+                    className="px-3 rounded-xl bg-slate-800 border border-slate-750 hover:bg-slate-750 text-slate-300 hover:text-white transition-all cursor-pointer flex items-center justify-center"
+                    title="Selecionar Diretório"
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
 
               {/* Snapshot Folder Input */}
               <div className="flex flex-col space-y-1.5">
                 <label className="text-xs text-slate-400 font-medium">Diretório de Snapshots (JPEG)</label>
-                <input
-                  type="text"
-                  value={appSettings.snapshotsFolder}
-                  onChange={(e) => setAppSettings({ ...appSettings, snapshotsFolder: e.target.value })}
-                  className="w-full bg-slate-900 border border-slate-850 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 outline-none focus:border-brand-primary"
-                />
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={appSettings.snapshotsFolder}
+                    onChange={(e) => setAppSettings({ ...appSettings, snapshotsFolder: e.target.value })}
+                    className="flex-1 bg-slate-900 border border-slate-850 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 outline-none focus:border-brand-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleSelectFolder('snapshotsFolder')}
+                    className="px-3 rounded-xl bg-slate-800 border border-slate-750 hover:bg-slate-750 text-slate-300 hover:text-white transition-all cursor-pointer flex items-center justify-center"
+                    title="Selecionar Diretório"
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Datasets Folder Input */}
+              <div className="flex flex-col space-y-1.5">
+                <label className="text-xs text-slate-400 font-medium">Diretório de Datasets (Treinamento IA)</label>
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={appSettings.datasetsFolder}
+                    onChange={(e) => setAppSettings({ ...appSettings, datasetsFolder: e.target.value })}
+                    className="flex-1 bg-slate-900 border border-slate-850 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 outline-none focus:border-brand-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleSelectFolder('datasetsFolder')}
+                    className="px-3 rounded-xl bg-slate-800 border border-slate-750 hover:bg-slate-750 text-slate-300 hover:text-white transition-all cursor-pointer flex items-center justify-center"
+                    title="Selecionar Diretório"
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
 
               {/* GPU Toggle (Preparation for CUDA) */}
@@ -255,6 +346,47 @@ export const Settings: React.FC = () => {
               >
                 <Save className="h-4 w-4" />
                 <span>Salvar Configurações Gerais</span>
+              </button>
+            </div>
+          </div>
+
+          {/* AI Training & Datasets Panel */}
+          <div className="glass-panel rounded-2xl p-5 border border-slate-800 space-y-5 shadow-lg">
+            <div className="flex items-center space-x-2">
+              <BrainCircuit className="h-5 w-5 text-brand-primary animate-pulse-slow" />
+              <h3 className="text-sm font-semibold text-slate-200">
+                Treinamento & Banco de Dados de IA
+              </h3>
+            </div>
+            
+            <p className="text-xs text-slate-400 leading-relaxed font-medium">
+              Gerencie a base de dados de imagens para treinar o YOLOv11 ou inicie o processo de coleta de imagens e treinamento para novos objetos.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+              {/* Button to navigate to Dataset IA page */}
+              <Link
+                to="/dataset"
+                className="flex items-center justify-center space-x-2.5 p-4 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700/80 hover:bg-slate-850/40 text-slate-200 transition-all text-xs font-semibold shadow hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+              >
+                <Database className="h-4.5 w-4.5 text-brand-secondary" />
+                <div className="flex flex-col items-start text-left">
+                  <span>Base de Dados (Dataset IA)</span>
+                  <span className="text-[9px] text-slate-500 font-medium">Visualizar e gerenciar imagens coletadas</span>
+                </div>
+              </Link>
+
+              {/* Button to trigger training modal */}
+              <button
+                type="button"
+                onClick={() => setIsTrainerModalOpen(true)}
+                className="flex items-center justify-center space-x-2.5 p-4 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700/80 hover:bg-slate-850/40 text-slate-200 transition-all text-xs font-semibold shadow hover:scale-[1.01] active:scale-[0.99] cursor-pointer text-left"
+              >
+                <BrainCircuit className="h-4.5 w-4.5 text-brand-primary" />
+                <div className="flex flex-col items-start text-left">
+                  <span>Treinar IA (Novo Objeto)</span>
+                  <span className="text-[9px] text-slate-500 font-medium">Coletar imagens e iniciar treinamento</span>
+                </div>
               </button>
             </div>
           </div>
@@ -451,6 +583,71 @@ export const Settings: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* AI Trainer Modal Overlay */}
+      {isTrainerModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-200 p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <BrainCircuit className="h-5 w-5 text-brand-primary animate-pulse" />
+                <h2 className="text-md font-bold text-slate-100">Treinar IA (Detector de Objetos)</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTrainerModalOpen(false);
+                  setTrainerStatus('');
+                }}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex flex-col space-y-1.5">
+              <label className="text-xs text-slate-455 font-medium">Selecione a Câmera Origem</label>
+              <select
+                value={selectedCamId}
+                onChange={(e) => setSelectedCamId(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-850 rounded-xl px-3 py-2.5 text-sm text-slate-200 outline-none focus:border-brand-primary transition-all cursor-pointer"
+              >
+                <option value="" disabled>Selecione uma câmera...</option>
+                {cameras.map((cam) => (
+                  <option key={cam.id} value={cam.id}>
+                    {cam.name} ({cam.source})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col space-y-1.5">
+              <label className="text-xs text-slate-455 font-medium">Nome do Objeto ou Classe</label>
+              <input
+                value={trainerClassName}
+                onChange={(e) => setTrainerClassName(e.target.value)}
+                placeholder="Ex: capacete, copo, garrafa"
+                className="w-full bg-slate-950 border border-slate-850 rounded-xl px-3 py-2.5 text-sm text-slate-200 outline-none focus:border-brand-primary transition-all placeholder:text-slate-600"
+              />
+            </div>
+
+            <button
+              onClick={handleStartTrainer}
+              disabled={isStartingTrainer || !selectedCamId || !trainerClassName.trim()}
+              className="w-full flex items-center justify-center space-x-2 px-3 py-3 rounded-xl bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-semibold shadow-lg hover:brightness-110 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <BrainCircuit className="h-4 w-4" />
+              <span>{isStartingTrainer ? 'Iniciando Treinador...' : 'Iniciar Treinador IA'}</span>
+            </button>
+
+            {trainerStatus && (
+              <p className="text-xs text-slate-400 text-center leading-relaxed mt-2 p-2 bg-slate-950/50 border border-slate-850 rounded-lg font-medium">
+                {trainerStatus}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

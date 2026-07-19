@@ -8,14 +8,46 @@ import yaml
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_DATASET = SCRIPT_DIR / "datasets" / "dataset.yaml"
-DEFAULT_WEIGHTS = SCRIPT_DIR / "weights" / "yolo11n.pt"
-DEFAULT_OUTPUT = SCRIPT_DIR / "weights" / "custom_dataset.onnx"
+
+def get_base_dir() -> Path:
+    if getattr(sys, 'frozen', False):
+        # 1. Try sys.executable
+        exe_dir = Path(sys.executable).resolve().parent
+        if (exe_dir / "datasets").exists() or (exe_dir.parent / "datasets").exists():
+            if exe_dir.name == 'dist':
+                return exe_dir.parent
+            return exe_dir
+
+        # 2. Try sys.argv[0]
+        if sys.argv and sys.argv[0]:
+            argv_dir = Path(sys.argv[0]).resolve().parent
+            if (argv_dir / "datasets").exists() or (argv_dir.parent / "datasets").exists():
+                if argv_dir.name == 'dist':
+                    return argv_dir.parent
+                return argv_dir
+
+        # 3. Fallback to current working directory
+        cwd_dir = Path.cwd()
+        if (cwd_dir / "datasets").exists() or (cwd_dir.parent / "datasets").exists():
+            if cwd_dir.name == 'dist':
+                return cwd_dir.parent
+            return cwd_dir
+
+        # Default fallback
+        if exe_dir.name == 'dist':
+            return exe_dir.parent
+        return exe_dir
+    else:
+        return SCRIPT_DIR
+
+DEFAULT_DATASET = get_base_dir() / "datasets" / "dataset.yaml"
+DEFAULT_WEIGHTS = get_base_dir() / "weights" / "yolo11n.pt"
+DEFAULT_OUTPUT = get_base_dir() / "weights" / "custom_dataset.onnx"
 
 
 def resolve_path(value: str | Path) -> Path:
     path = Path(value)
-    return path if path.is_absolute() else SCRIPT_DIR / path
+    return path if path.is_absolute() else get_base_dir() / path
 
 
 def fail(message: str) -> None:
@@ -35,6 +67,97 @@ def load_dataset_config(dataset_yaml: Path) -> dict:
         fail(f"nao foi possivel ler o dataset.yaml: {exc}")
 
     return data
+
+
+def normalize_dataset_classes(yaml_path: Path) -> None:
+    if not yaml_path.exists():
+        return
+        
+    try:
+        with yaml_path.open("r", encoding="utf-8") as file:
+            data = yaml.safe_load(file) or {}
+    except Exception as exc:
+        print(f"[DatasetTrainer] Nao foi possivel ler o dataset.yaml para normalizacao: {exc}")
+        return
+
+    names = data.get("names")
+    if not names:
+        return
+
+    # Check if names keys are already sequential integers from 0 to len(names)-1
+    try:
+        keys = sorted([int(k) for k in names.keys()])
+        is_sequential = all(keys[i] == i for i in range(len(keys)))
+    except Exception as exc:
+        print(f"[DatasetTrainer] Erro ao analisar as chaves das classes: {exc}")
+        return
+    
+    if is_sequential:
+        print("[DatasetTrainer] Indices das classes ja estao sequenciais.")
+        return
+
+    print("[DatasetTrainer] Indices nao sequenciais detectados. Iniciando normalizacao...")
+    # Create mapping: old_id -> new_id
+    id_map = {old_id: new_id for new_id, old_id in enumerate(keys)}
+    
+    # Create new names dict
+    new_names = {new_id: names[old_id] for old_id, new_id in id_map.items()}
+    
+    # Update yaml data
+    data["names"] = new_names
+    
+    # Resolve paths
+    dataset_root = yaml_path.parent
+    if "path" in data:
+        p = Path(data["path"])
+        if p.is_absolute():
+            dataset_root = p
+        else:
+            dataset_root = (yaml_path.parent / p).resolve()
+            
+    train_label_dir = dataset_root / "labels" / "train"
+    val_label_dir = dataset_root / "labels" / "valid"
+    
+    # Helper to rewrite labels in a directory
+    def update_labels_in_dir(label_dir: Path):
+        if not label_dir.exists():
+            return
+        for txt_file in label_dir.glob("*.txt"):
+            try:
+                lines = txt_file.read_text(encoding="utf-8").splitlines()
+                updated_lines = []
+                changed = False
+                for line in lines:
+                    parts = line.strip().split()
+                    if parts:
+                        try:
+                            old_cid = int(parts[0])
+                            if old_cid in id_map:
+                                new_cid = id_map[old_cid]
+                                if old_cid != new_cid:
+                                    parts[0] = str(new_cid)
+                                    changed = True
+                            updated_lines.append(" ".join(parts))
+                        except ValueError:
+                            updated_lines.append(line)
+                    else:
+                        updated_lines.append(line)
+                if changed:
+                    txt_file.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+            except Exception as e:
+                print(f"[DatasetTrainer] Erro ao atualizar arquivo de label {txt_file.name}: {e}")
+
+    # Update labels
+    update_labels_in_dir(train_label_dir)
+    update_labels_in_dir(val_label_dir)
+
+    # Save updated yaml
+    try:
+        with yaml_path.open("w", encoding="utf-8") as file:
+            yaml.safe_dump(data, file, default_flow_style=False)
+        print(f"[DatasetTrainer] dataset.yaml e labels normalizados com sucesso. Novas classes: {new_names}")
+    except Exception as e:
+        print(f"[DatasetTrainer] Erro ao salvar dataset.yaml atualizado: {e}")
 
 
 def validate_dataset(dataset_yaml: Path) -> None:
@@ -82,6 +205,7 @@ def get_device(preferred_device: str):
         return preferred_device
 
     try:
+        # pyrefly: ignore [missing-import]
         import torch
 
         return 0 if torch.cuda.is_available() else "cpu"
@@ -91,6 +215,7 @@ def get_device(preferred_device: str):
 
 def train_model(args: argparse.Namespace) -> None:
     try:
+        # pyrefly: ignore [missing-import]
         from ultralytics import YOLO
     except ImportError:
         fail("biblioteca ultralytics nao encontrada dentro do executavel/ambiente.")
@@ -100,6 +225,9 @@ def train_model(args: argparse.Namespace) -> None:
     output_path = resolve_path(args.output)
     runs_dir = resolve_path(args.runs_dir)
     device = get_device(args.device)
+
+    # Normalize dataset class IDs before training
+    normalize_dataset_classes(dataset_yaml)
 
     validate_dataset(dataset_yaml)
 
@@ -151,7 +279,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(DEFAULT_DATASET), help="Caminho do dataset.yaml")
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="Pesos base .pt ou nome do modelo")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Destino do modelo ONNX exportado")
-    parser.add_argument("--runs-dir", default=str(SCRIPT_DIR.parent / "runs"), help="Pasta para logs/resultados")
+    parser.add_argument("--runs-dir", default=str(get_base_dir().parent / "runs"), help="Pasta para logs/resultados")
     parser.add_argument("--name", default="dataset_train", help="Nome da execucao dentro da pasta runs")
     parser.add_argument("--epochs", type=int, default=50, help="Quantidade de epocas")
     parser.add_argument("--batch", type=int, default=8, help="Tamanho do batch")

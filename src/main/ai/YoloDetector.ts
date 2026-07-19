@@ -97,7 +97,7 @@ export class YoloDetector implements Detector {
     });
   }
 
-  async detect(rawRgbaBuffer: Buffer): Promise<Detection[]> {
+  async detect(rawRgbaBuffer: Buffer, customClasses?: Record<number, string>): Promise<Detection[]> {
     if (!this.isInitialized || !this.worker) {
       throw new Error('YoloDetector is not initialized. Please call initialize() first.');
     }
@@ -118,14 +118,15 @@ export class YoloDetector implements Detector {
         const rawArrayBuffer = rawRgbaBuffer.buffer.slice(
           rawRgbaBuffer.byteOffset,
           rawRgbaBuffer.byteOffset + rawRgbaBuffer.byteLength
-        );
+        ) as ArrayBuffer;
 
         this.worker?.postMessage(
           {
             type: 'detect',
             width: 640,
             height: 640,
-            buffer: rawArrayBuffer
+            buffer: rawArrayBuffer,
+            customClasses
           },
           [rawArrayBuffer] // Mark buffer as transferable (avoid duplicate memory allocation)
         );

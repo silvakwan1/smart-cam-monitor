@@ -22,7 +22,7 @@ export interface BoundingBox {
 }
 
 export interface Detection {
-  label: 'person' | 'dog' | 'cat' | 'car' | 'truck' | 'bicycle' | 'motorcycle';
+  label: string;
   confidence: number; // 0.0 to 1.0
   box: BoundingBox;
 }
@@ -44,6 +44,7 @@ export interface SystemEvent {
   cameraName: string;
   timestamp: number;
   type: 'person_detected' | 'person_left' | 'object_detected' | 'object_lost' | 'motion_detected' | 'camera_error' | 'frame_lost';
+  description: string;
   label?: string;
   confidence?: number;
   snapshotPath?: string;
