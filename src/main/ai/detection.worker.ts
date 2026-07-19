@@ -101,10 +101,12 @@ async function initialize(modelPath: string) {
     // Dynamic import to prevent loading issues if the binary is missing initially
     const ort = require('onnxruntime-node');
     
-    // Configure session options
+    // Configure session options to prevent ONNX Runtime from hogging all CPU cores
     const options = {
       executionProviders: ['cpu'], // Standard fallback. Can add 'cuda' if GPU is ready.
-      graphOptimizationLevel: 'all'
+      graphOptimizationLevel: 'all',
+      intraOpNumThreads: 1,
+      interOpNumThreads: 1
     };
 
     session = await ort.InferenceSession.create(modelPath, options);

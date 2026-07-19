@@ -97,7 +97,7 @@ export class YoloDetector implements Detector {
     });
   }
 
-  async detect(jpegBuffer: Buffer): Promise<Detection[]> {
+  async detect(rawRgbaBuffer: Buffer): Promise<Detection[]> {
     if (!this.isInitialized || !this.worker) {
       throw new Error('YoloDetector is not initialized. Please call initialize() first.');
     }
@@ -114,20 +114,10 @@ export class YoloDetector implements Detector {
       this.rejectPromise = reject;
 
       try {
-        // Decode and scale incoming JPEG stream to 640x640 using Electron's native code
-        const { nativeImage } = require('electron');
-        const img = nativeImage.createFromBuffer(jpegBuffer);
-        
-        // Scale to standard YOLO dimensions
-        const resized = img.resize({ width: 640, height: 640, quality: 'good' });
-        
-        // Grab raw BGRA/RGBA bitmap buffer
-        const rawRgba = resized.toBitmap();
-
         // Convert Node Buffer to standard ArrayBuffer for thread transfer (zero-copy)
-        const rawArrayBuffer = rawRgba.buffer.slice(
-          rawRgba.byteOffset,
-          rawRgba.byteOffset + rawRgba.byteLength
+        const rawArrayBuffer = rawRgbaBuffer.buffer.slice(
+          rawRgbaBuffer.byteOffset,
+          rawRgbaBuffer.byteOffset + rawRgbaBuffer.byteLength
         );
 
         this.worker?.postMessage(

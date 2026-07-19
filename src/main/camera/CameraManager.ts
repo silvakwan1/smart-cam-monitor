@@ -41,6 +41,9 @@ export class CameraManager {
   private recordingStartTime = 0;
   private currentRecordingDetections: Array<{ time: number; detections: Detection[] }> = [];
 
+  // AI Inference Throttle state
+  private lastInferenceStartTime = 0;
+
   // Callbacks
   private onFrameUpdate: (base64Frame: string, detections: Detection[], stats: { captureFps: number; inferenceFps: number }) => void;
   private onStatusUpdate: (status: CameraStatus) => void;
@@ -166,35 +169,42 @@ export class CameraManager {
     // 1. Run Pixel-Based Motion Detection (takes < 0.2ms)
     this.runMotionDetection(rawBitmap as unknown as Uint8Array, frameBuffer);
 
-    // 2. Trigger AI worker detection asynchronously if worker is ready
-    this.detector.detect(frameBuffer)
-      .then((detections) => {
-        if (detections.length > 0 || this.activeDetections.length > 0) {
-          this.processAIResults(detections, frameBuffer);
-        }
+    // 2. Trigger AI worker detection asynchronously if worker is ready and throttled
+    const nowTime = Date.now();
+    const DETECTION_THROTTLE_MS = 200; // Run AI inference at max 5 FPS to conserve CPU
+    const canRunDetection = !this.detector.getInferenceStats().isBusy && (nowTime - this.lastInferenceStartTime >= DETECTION_THROTTLE_MS);
 
-        // If video recording is active, save the detections with a relative timestamp
-        if (this.recorder.isActive() && this.recordingStartTime > 0) {
-          const relativeTime = (Date.now() - this.recordingStartTime) / 1000;
-          this.currentRecordingDetections.push({
-            time: relativeTime,
-            detections: detections.map(d => ({
-              label: d.label,
-              confidence: d.confidence,
-              // Clamp bounding box to screen boundaries [0.0, 1.0] to prevent crashes or overflows
-              box: {
-                x: Math.max(0, Math.min(1, d.box.x)),
-                y: Math.max(0, Math.min(1, d.box.y)),
-                width: Math.max(0, Math.min(1, d.box.width)),
-                height: Math.max(0, Math.min(1, d.box.height))
-              }
-            }))
-          });
-        }
-      })
-      .catch((err) => {
-        console.error('[CameraManager] AI Inference error:', err);
-      });
+    if (canRunDetection) {
+      this.lastInferenceStartTime = nowTime;
+      this.detector.detect(rawBitmap)
+        .then((detections) => {
+          if (detections.length > 0 || this.activeDetections.length > 0) {
+            this.processAIResults(detections, frameBuffer);
+          }
+
+          // If video recording is active, save the detections with a relative timestamp
+          if (this.recorder.isActive() && this.recordingStartTime > 0) {
+            const relativeTime = (Date.now() - this.recordingStartTime) / 1000;
+            this.currentRecordingDetections.push({
+              time: relativeTime,
+              detections: detections.map(d => ({
+                label: d.label,
+                confidence: d.confidence,
+                // Clamp bounding box to screen boundaries [0.0, 1.0] to prevent crashes or overflows
+                box: {
+                  x: Math.max(0, Math.min(1, d.box.x)),
+                  y: Math.max(0, Math.min(1, d.box.y)),
+                  width: Math.max(0, Math.min(1, d.box.width)),
+                  height: Math.max(0, Math.min(1, d.box.height))
+                }
+              }))
+            });
+          }
+        })
+        .catch((err) => {
+          console.error('[CameraManager] AI Inference error:', err);
+        });
+    }
 
     // 3. Write frame to recorder if currently active
     if (this.recorder.isActive()) {
