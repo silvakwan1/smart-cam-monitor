@@ -8,6 +8,17 @@ snapshots
 runs
 taben
 build
+resources/bin/ffmpeg.exe
 
+__pycache__/
+*.pyc
+*.pt
+*.onnx
+yarn.lock
+
+ai-engine/*.spec
+ai-engine/dist
+ai-engine/build
 ai-engine/datasets/images/*
 ai-engine/datasets/labels/*
+

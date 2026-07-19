@@ -1,8 +1,7 @@
 import { ChildProcess, spawn } from 'child_process';
-import ffmpegPathRaw from 'ffmpeg-static';
-const ffmpegPath = ffmpegPathRaw ? ffmpegPathRaw.replace('app.asar', 'app.asar.unpacked') : '';
 import * as fs from 'fs';
 import * as path from 'path';
+import { assertFFmpegExists, getFFmpegPath } from '../utils/ffmpeg';
 
 export class Recorder {
   private ffmpegProcess: ChildProcess | null = null;
@@ -22,9 +21,8 @@ export class Recorder {
       throw new Error('Recording is already in progress.');
     }
 
-    if (!ffmpegPath) {
-      throw new Error('FFmpeg binary not found in path.');
-    }
+    const ffmpegPath = getFFmpegPath();
+    assertFFmpegExists(ffmpegPath);
 
     // Ensure output directories exist
     const dir = path.dirname(outputPath);
@@ -49,7 +47,7 @@ export class Recorder {
       outputPath
     ];
 
-    console.log(`[Recorder] Initiating recording: ${outputPath}`);
+    console.log(`[Recorder] Initiating recording with FFmpeg at ${ffmpegPath}: ${outputPath}`);
 
     try {
       this.ffmpegProcess = spawn(ffmpegPath, ffmpegArgs, {
@@ -69,7 +67,7 @@ export class Recorder {
       });
 
       this.ffmpegProcess.on('error', (err) => {
-        console.error('[Recorder] FFmpeg execution error:', err);
+        console.error(`[Recorder] FFmpeg execution error at ${ffmpegPath}:`, err);
         this.isRecording = false;
       });
 

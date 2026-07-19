@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   stopCamera: () => ipcRenderer.invoke('camera:stop'),
   setRecordingMode: (mode: RecordingMode) => ipcRenderer.invoke('camera:set-recording', mode),
   takeManualSnapshot: () => ipcRenderer.invoke('camera:take-snapshot'),
+  startTrainer: (className: string, cameraSource?: string) => ipcRenderer.invoke('trainer:start', className, cameraSource),
 
   // Event logger history
   getEvents: () => ipcRenderer.invoke('events:get'),

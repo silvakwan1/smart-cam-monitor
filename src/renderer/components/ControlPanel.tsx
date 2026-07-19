@@ -84,6 +84,8 @@ export const ControlPanel: React.FC = () => {
         </div>
       </div>
 
+
+
       {/* 2. Intelligent Recording Settings */}
       <div className="glass-panel rounded-2xl p-5 border border-slate-800 flex flex-col space-y-4 shadow-lg">
         <div className="flex items-center justify-between">

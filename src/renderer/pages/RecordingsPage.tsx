@@ -86,6 +86,14 @@ export const RecordingsPage: React.FC = () => {
     }
   };
 
+  const handleOpenFolder = async () => {
+    try {
+      await window.electronAPI.openRecordingsFolder();
+    } catch (err) {
+      console.error('Failed to open recordings folder:', err);
+    }
+  };
+
   useEffect(() => {
     fetchRecordings();
   }, []);

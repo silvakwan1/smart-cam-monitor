@@ -17,7 +17,7 @@ function buildMain() {
       platform: 'node',
       target: 'node22',
       outdir: path.resolve(__dirname, '../dist/main'),
-      external: ['electron', 'onnxruntime-node', 'ffmpeg-static', 'fsevents', '@u4/opencv4nodejs'],
+      external: ['electron', 'onnxruntime-node', 'fsevents', '@u4/opencv4nodejs'],
       format: 'cjs',
       sourcemap: true,
     });

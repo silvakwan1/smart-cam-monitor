@@ -9,6 +9,7 @@ export interface IElectronAPI {
   stopCamera: () => Promise<{ success: boolean }>;
   setRecordingMode: (mode: RecordingMode) => Promise<{ success: boolean }>;
   takeManualSnapshot: () => Promise<{ success: boolean }>;
+  startTrainer: (className: string, cameraSource?: string) => Promise<{ success: boolean; message?: string }>;
 
   getEvents: () => Promise<SystemEvent[]>;
   clearEvents: () => Promise<SystemEvent[]>;

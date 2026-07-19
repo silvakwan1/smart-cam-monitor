@@ -1,13 +1,12 @@
 import { app, BrowserWindow, ipcMain, protocol, net, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
-import { spawn } from 'child_process';
-import ffmpegPathRaw from 'ffmpeg-static';
-const ffmpegPath = ffmpegPathRaw ? ffmpegPathRaw.replace('app.asar', 'app.asar.unpacked') : '';
+import { ChildProcess, spawn } from 'child_process';
 import { CameraConfig, RecordingMode, SystemEvent, SystemStats } from '../shared/types';
 import { YoloDetector } from './ai/YoloDetector';
 import { CameraManager } from './camera/CameraManager';
 import { listDevices } from './camera/listDevices';
+import { assertFFmpegExists, getFFmpegPath } from './utils/ffmpeg';
 
 // Register standard custom protocol for playing local recording files inside React
 protocol.registerSchemesAsPrivileged([
@@ -17,6 +16,7 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null;
 let detector: YoloDetector | null = null;
 let cameraManager: CameraManager | null = null;
+let trainerProcess: ChildProcess | null = null;
 
 // Persistence file paths in OS AppData directory
 const USER_DATA_PATH = app.getPath('userData');
@@ -101,6 +101,74 @@ function saveEvents() {
 
 function saveSettingsDb() {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(generalSettings, null, 2));
+}
+
+function getTrainerExecutablePath() {
+  const packagedPath = path.join(process.resourcesPath, 'ai-engine', 'camera_trainer.exe');
+  const devPath = path.join(PROJECT_DIR, 'ai-engine', 'dist', 'camera_trainer.exe');
+
+  if (app.isPackaged && fs.existsSync(packagedPath)) {
+    return packagedPath;
+  }
+
+  if (fs.existsSync(devPath)) {
+    return devPath;
+  }
+
+  return null;
+}
+
+function launchTrainerProcess(scriptPath: string, className: string, cameraSource?: string): Promise<ChildProcess> {
+  const trainerExecutablePath = getTrainerExecutablePath();
+  const trainerArgs = ['--class-name', className];
+  if (cameraSource) {
+    trainerArgs.push('--cam', cameraSource);
+  }
+
+  if (trainerExecutablePath) {
+    return new Promise((resolve, reject) => {
+      const child = spawn(trainerExecutablePath, trainerArgs, {
+        cwd: path.dirname(trainerExecutablePath),
+        windowsHide: false,
+        stdio: 'ignore'
+      });
+
+      child.once('spawn', () => resolve(child));
+      child.once('error', reject);
+    });
+  }
+
+  const baseArgs = [scriptPath, ...trainerArgs];
+  const candidates = process.platform === 'win32'
+    ? [
+        { command: 'py', args: ['-3', ...baseArgs] },
+        { command: 'python', args: baseArgs }
+      ]
+    : [
+        { command: 'python3', args: baseArgs },
+        { command: 'python', args: baseArgs }
+      ];
+
+  return new Promise((resolve, reject) => {
+    const tryLaunch = (index: number) => {
+      const candidate = candidates[index];
+      if (!candidate) {
+        reject(new Error('Treinador empacotado nao encontrado e Python nao esta instalado. Gere o camera_trainer.exe antes de empacotar o app.'));
+        return;
+      }
+
+      const child = spawn(candidate.command, candidate.args, {
+        cwd: path.join(PROJECT_DIR, 'ai-engine'),
+        windowsHide: false,
+        stdio: 'ignore'
+      });
+
+      child.once('spawn', () => resolve(child));
+      child.once('error', () => tryLaunch(index + 1));
+    };
+
+    tryLaunch(0);
+  });
 }
 
 // Window creation
@@ -237,6 +305,10 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', async () => {
   if (statsInterval) clearInterval(statsInterval);
+  if (trainerProcess && !trainerProcess.killed) {
+    trainerProcess.kill();
+    trainerProcess = null;
+  }
   
   if (cameraManager) {
     await cameraManager.stop();
@@ -302,6 +374,36 @@ ipcMain.handle('camera:take-snapshot', async () => {
   }
   // Let CameraManager trigger a snapshot on the next incoming frame
   // which will emit a system event containing snapshot data
+  return { success: true };
+});
+
+ipcMain.handle('trainer:start', async (event, className: string, cameraSource?: string) => {
+  if (trainerProcess && !trainerProcess.killed) {
+    return { success: false, message: 'O treinador de IA ja esta em execucao.' };
+  }
+
+  const trimmedClassName = className.trim();
+  if (!trimmedClassName) {
+    throw new Error('Informe o nome do objeto/classe para treinar.');
+  }
+
+  const trainerPath = path.join(PROJECT_DIR, 'ai-engine', 'camera_trainer.py');
+  const trainerExecutablePath = getTrainerExecutablePath();
+  if (!trainerExecutablePath && !fs.existsSync(trainerPath)) {
+    throw new Error(`Treinador nao encontrado. Esperado camera_trainer.exe ou ${trainerPath}`);
+  }
+
+  trainerProcess = await launchTrainerProcess(trainerPath, trimmedClassName, cameraSource);
+
+  trainerProcess.on('close', () => {
+    trainerProcess = null;
+  });
+
+  trainerProcess.on('error', (err) => {
+    console.error('[Main] Failed to start AI trainer:', err);
+    trainerProcess = null;
+  });
+
   return { success: true };
 });
 
@@ -479,9 +581,8 @@ ipcMain.handle('snapshots:delete-multiple', async (event, filePaths: string[]) =
 });
 
 ipcMain.handle('recordings:trim', async (event, filePath: string, startTimeSec: number, durationSec: number) => {
-  if (!ffmpegPath) {
-    throw new Error('FFmpeg binary not found.');
-  }
+  const ffmpegPath = getFFmpegPath();
+  assertFFmpegExists(ffmpegPath);
 
   // Generate output filename
   const dir = path.dirname(filePath);
@@ -500,7 +601,7 @@ ipcMain.handle('recordings:trim', async (event, filePath: string, startTimeSec: 
     outputPath
   ];
 
-  console.log(`[Main] Trimming video: spawn ${ffmpegPath} ${ffmpegArgs.join(' ')}`);
+  console.log(`[Main] Trimming video with FFmpeg: ${ffmpegPath} ${ffmpegArgs.join(' ')}`);
 
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpegPath, ffmpegArgs);
@@ -542,7 +643,7 @@ ipcMain.handle('recordings:trim', async (event, filePath: string, startTimeSec: 
     });
 
     proc.on('error', (err) => {
-      console.error('[Main] Failed to start FFmpeg trim process:', err);
+      console.error(`[Main] Failed to start FFmpeg trim process at ${ffmpegPath}:`, err);
       reject(err);
     });
   });

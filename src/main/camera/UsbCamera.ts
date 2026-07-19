@@ -1,7 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
-import ffmpegPathRaw from 'ffmpeg-static';
-const ffmpegPath = ffmpegPathRaw ? ffmpegPathRaw.replace('app.asar', 'app.asar.unpacked') : '';
 import { CameraConfig } from '../../shared/types';
+import { assertFFmpegExists, getFFmpegPath } from '../utils/ffmpeg';
 import { CameraProvider } from './CameraProvider';
 import { listDevices } from './listDevices';
 
@@ -32,11 +31,6 @@ export class UsbCamera implements CameraProvider {
     this.onErrorCallback = onError;
     this.isStreaming = true;
 
-    if (!ffmpegPath) {
-      onError(new Error('FFmpeg binary not found in ffmpeg-static.'));
-      return;
-    }
-
     const width = this.config.width || 640;
     const height = this.config.height || 480;
     const fps = this.config.fps || 30;
@@ -46,6 +40,9 @@ export class UsbCamera implements CameraProvider {
       let ffmpegArgs: string[] = [];
 
       try {
+        const ffmpegPath = getFFmpegPath();
+        assertFFmpegExists(ffmpegPath);
+
         if (process.platform === 'win32') {
           // On Windows, if user specifies '0' or empty, dynamically query physical inputs
           let deviceName = this.config!.source;
@@ -113,8 +110,8 @@ export class UsbCamera implements CameraProvider {
 
         if (!this.isStreaming) return;
 
-        console.log(`[UsbCamera] Spawning FFmpeg with args:`, ffmpegArgs.join(' '));
-        this.ffmpegProcess = spawn(ffmpegPath!, ffmpegArgs, {
+        console.log(`[UsbCamera] Spawning FFmpeg at ${ffmpegPath} with args:`, ffmpegArgs.join(' '));
+        this.ffmpegProcess = spawn(ffmpegPath, ffmpegArgs, {
           stdio: ['ignore', 'pipe', 'pipe']
         });
 
@@ -161,7 +158,7 @@ export class UsbCamera implements CameraProvider {
         });
 
         this.ffmpegProcess.on('error', (err) => {
-          console.error('[UsbCamera] FFmpeg process error:', err);
+          console.error(`[UsbCamera] FFmpeg process error at ${ffmpegPath}:`, err);
           if (this.onErrorCallback) {
             this.onErrorCallback(err);
           }

@@ -1,7 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
-import ffmpegPathRaw from 'ffmpeg-static';
-const ffmpegPath = ffmpegPathRaw ? ffmpegPathRaw.replace('app.asar', 'app.asar.unpacked') : '';
 import { CameraConfig } from '../../shared/types';
+import { assertFFmpegExists, getFFmpegPath } from '../utils/ffmpeg';
 import { CameraProvider } from './CameraProvider';
 
 export class IpCamera implements CameraProvider {
@@ -31,11 +30,6 @@ export class IpCamera implements CameraProvider {
     this.onErrorCallback = onError;
     this.isStreaming = true;
 
-    if (!ffmpegPath) {
-      onError(new Error('FFmpeg binary not found in ffmpeg-static.'));
-      return;
-    }
-
     const width = this.config.width || 1280; // IP cameras default to higher res
     const height = this.config.height || 720;
     const fps = this.config.fps || 15; // RTSP streams are often 15 FPS to conserve bandwidth
@@ -53,7 +47,10 @@ export class IpCamera implements CameraProvider {
     ];
 
     try {
-      console.log(`[IpCamera] Connecting to RTSP source using FFmpeg...`);
+      const ffmpegPath = getFFmpegPath();
+      assertFFmpegExists(ffmpegPath);
+
+      console.log(`[IpCamera] Connecting to RTSP source using FFmpeg at ${ffmpegPath}...`);
       this.ffmpegProcess = spawn(ffmpegPath, ffmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -101,7 +98,7 @@ export class IpCamera implements CameraProvider {
       });
 
       this.ffmpegProcess.on('error', (err) => {
-        console.error('[IpCamera] FFmpeg process error:', err);
+        console.error(`[IpCamera] FFmpeg process error at ${ffmpegPath}:`, err);
         if (this.onErrorCallback) {
           this.onErrorCallback(err);
         }

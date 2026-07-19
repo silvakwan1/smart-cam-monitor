@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
-import ffmpegPath from 'ffmpeg-static';
 import * as fs from 'fs';
+import { assertFFmpegExists, getFFmpegPath } from '../utils/ffmpeg';
 
 /**
  * Queries the system for available video capture devices using FFmpeg.
@@ -8,8 +8,12 @@ import * as fs from 'fs';
  */
 export function listDevices(): Promise<string[]> {
   return new Promise((resolve) => {
-    if (!ffmpegPath) {
-      console.warn('[listDevices] FFmpeg static binary path not resolved.');
+    let ffmpegPath = '';
+    try {
+      ffmpegPath = getFFmpegPath();
+      assertFFmpegExists(ffmpegPath);
+    } catch (err) {
+      console.warn('[listDevices] FFmpeg binary path not resolved:', err);
       resolve([]);
       return;
     }
@@ -32,6 +36,7 @@ export function listDevices(): Promise<string[]> {
     }
 
     // Spawn FFmpeg query
+    console.log(`[listDevices] Spawning FFmpeg at ${ffmpegPath} to query devices.`);
     const proc = spawn(ffmpegPath, args);
     let output = '';
 
@@ -90,6 +95,11 @@ export function listDevices(): Promise<string[]> {
       }
 
       resolve(devices);
+    });
+
+    proc.on('error', (err) => {
+      console.error(`[listDevices] Error starting FFmpeg at ${ffmpegPath}:`, err);
+      resolve([]);
     });
   });
 }

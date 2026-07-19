@@ -8,6 +8,32 @@ export const EventHistory: React.FC = () => {
   const setFilterType = useEventStore((state) => state.setFilterType);
   const clearEvents = useEventStore((state) => state.clearEvents);
 
+  const [height, setHeight] = React.useState(() => {
+    const saved = localStorage.getItem('event-history-height');
+    return saved ? parseInt(saved, 10) : 176;
+  });
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = height;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaY = startY - moveEvent.clientY;
+      const newHeight = Math.max(56, Math.min(500, startHeight + deltaY));
+      setHeight(newHeight);
+      localStorage.setItem('event-history-height', newHeight.toString());
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
   const getEventIcon = (type: string) => {
     switch (type) {
       case 'person_detected':
@@ -49,9 +75,22 @@ export const EventHistory: React.FC = () => {
   });
 
   return (
-    <div className="glass-panel rounded-2xl p-4.5 border border-slate-800 flex flex-col h-44 shrink-0 shadow-lg">
+    <div 
+      style={{ height: `${height}px` }}
+      className={`glass-panel rounded-2xl border border-slate-800 flex flex-col shrink-0 shadow-lg relative select-none transition-all duration-75 ${
+        height <= 70 ? 'p-3 pt-3.5 pb-2 overflow-hidden' : 'p-4.5 pt-6'
+      }`}
+    >
+      {/* Resize Handle */}
+      <div
+        onMouseDown={handleMouseDown}
+        className="absolute top-0 left-0 right-0 h-2.5 cursor-ns-resize flex items-center justify-center hover:bg-brand-primary/10 transition-all rounded-t-2xl group z-30"
+      >
+        <div className="w-12 h-1 bg-slate-800 group-hover:bg-brand-primary/60 rounded transition-colors" />
+      </div>
+
       {/* Header and Controls */}
-      <div className="flex items-center justify-between pb-3.5 border-b border-slate-800/80 shrink-0">
+      <div className={`flex items-center justify-between shrink-0 ${height > 70 ? 'pb-3.5 border-b border-slate-800/80' : ''}`}>
         <div className="flex items-center space-x-3">
           <h3 className="text-sm font-semibold text-slate-200">
             Registro de Eventos Recentes
@@ -98,65 +137,67 @@ export const EventHistory: React.FC = () => {
       </div>
 
       {/* Events Timeline Container */}
-      <div className="flex-1 overflow-x-auto overflow-y-hidden mt-4 scrollbar-thin">
-        {filteredEvents.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-600 text-center py-6">
-            <Clock className="h-8 w-8 text-slate-700 mb-1.5" />
-            <p className="text-xs font-medium">Histórico limpo</p>
-            <p className="text-[10px] text-slate-500">Nenhum evento registrado sob o filtro selecionado</p>
-          </div>
-        ) : (
-          <div className="flex space-x-4 pb-2 h-full">
-            {filteredEvents.map((evt) => {
-              const formattedTime = new Date(evt.timestamp).toLocaleTimeString('pt-BR');
-              
-              return (
-                <div
-                  key={evt.id}
-                  className="w-80 shrink-0 bg-slate-900/60 border border-slate-800/80 rounded-xl p-3.5 flex space-x-3.5 hover:border-slate-700/80 hover:bg-slate-900 transition-all duration-200 group"
-                >
-                  {/* Event Thumbnail Snapshot */}
-                  <div className="w-20 h-20 rounded-lg overflow-hidden bg-slate-950 border border-slate-800/60 shrink-0 relative flex items-center justify-center group-hover:border-slate-700">
-                    {evt.snapshotData ? (
-                      <img
-                        src={`data:image/jpeg;base64,${evt.snapshotData}`}
-                        alt="Snapshot"
-                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
-                      />
-                    ) : (
-                      <ImageIcon className="h-6 w-6 text-slate-800" />
-                    )}
-                    <span className="absolute bottom-1 right-1 bg-black/70 px-1 py-0.5 rounded text-[8px] font-mono text-slate-300 font-bold">
-                      {formattedTime}
-                    </span>
-                  </div>
+      {height > 70 && (
+        <div className="flex-1 overflow-x-auto overflow-y-hidden mt-4 event-scrollbar">
+          {filteredEvents.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-slate-600 text-center py-6">
+              <Clock className="h-8 w-8 text-slate-700 mb-1.5" />
+              <p className="text-xs font-medium">Histórico limpo</p>
+              <p className="text-[10px] text-slate-500">Nenhum evento registrado sob o filtro selecionado</p>
+            </div>
+          ) : (
+            <div className="flex space-x-4 pb-2 h-full">
+              {filteredEvents.map((evt) => {
+                const formattedTime = new Date(evt.timestamp).toLocaleTimeString('pt-BR');
+                
+                return (
+                  <div
+                    key={evt.id}
+                    className="w-80 shrink-0 bg-slate-900/60 border border-slate-800/80 rounded-xl p-3.5 flex space-x-3.5 hover:border-slate-700/80 hover:bg-slate-900 transition-all duration-200 group"
+                  >
+                    {/* Event Thumbnail Snapshot */}
+                    <div className="w-20 h-20 rounded-lg overflow-hidden bg-slate-950 border border-slate-800/60 shrink-0 relative flex items-center justify-center group-hover:border-slate-700">
+                      {evt.snapshotData ? (
+                        <img
+                          src={`data:image/jpeg;base64,${evt.snapshotData}`}
+                          alt="Snapshot"
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+                        />
+                      ) : (
+                        <ImageIcon className="h-6 w-6 text-slate-800" />
+                      )}
+                      <span className="absolute bottom-1 right-1 bg-black/70 px-1 py-0.5 rounded text-[8px] font-mono text-slate-300 font-bold">
+                        {formattedTime}
+                      </span>
+                    </div>
 
-                  {/* Event Metadata */}
-                  <div className="flex-1 flex flex-col justify-between py-0.5 min-w-0">
-                    <div className="flex flex-col space-y-1">
-                      <div className="flex items-center space-x-1.5">
-                        {getEventIcon(evt.type)}
-                        <span className={`text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md border ${getEventBadgeClass(evt.type)}`}>
-                          {evt.type.replace('_', ' ')}
-                        </span>
+                    {/* Event Metadata */}
+                    <div className="flex-1 flex flex-col justify-between py-0.5 min-w-0">
+                      <div className="flex flex-col space-y-1">
+                        <div className="flex items-center space-x-1.5">
+                          {getEventIcon(evt.type)}
+                          <span className={`text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md border ${getEventBadgeClass(evt.type)}`}>
+                            {evt.type.replace('_', ' ')}
+                          </span>
+                        </div>
+                        
+                        <p className="text-xs font-semibold text-slate-200 truncate mt-1">
+                          {evt.label ? `${evt.label.toUpperCase()} (${(evt.confidence! * 100).toFixed(0)}%)` : evt.cameraName}
+                        </p>
                       </div>
-                      
-                      <p className="text-xs font-semibold text-slate-200 truncate mt-1">
-                        {evt.label ? `${evt.label.toUpperCase()} (${(evt.confidence! * 100).toFixed(0)}%)` : evt.cameraName}
-                      </p>
-                    </div>
 
-                    <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-1">
-                      <span className="truncate max-w-[120px]">{evt.cameraName}</span>
-                      <span className="text-slate-400 font-semibold">{formattedTime}</span>
+                      <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-1">
+                        <span className="truncate max-w-[120px]">{evt.cameraName}</span>
+                        <span className="text-slate-400 font-semibold">{formattedTime}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

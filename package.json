@@ -10,16 +10,13 @@
     "build": "npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
     "build:main": "node scripts/build-main.js",
-    "package": "npm run build && electron-builder"
+    "build:trainer": "py -3 -m PyInstaller --onefile --name camera_trainer --distpath ai-engine/dist --workpath ai-engine/build --specpath ai-engine ai-engine/camera_trainer.py",
+    "build:dataset-trainer": "py -3 -m PyInstaller --onefile --name dataset_trainer --distpath ai-engine/dist --workpath ai-engine/build --specpath ai-engine ai-engine/dataset_trainer.py",
+    "package": "npm run build && electron-builder",
+    "package:all": "npm run build:trainer && npm run build:dataset-trainer && npm run build && electron-builder"
   },
   "dependencies": {
-    "ffmpeg-static": "^5.2.0",
-    "lucide-react": "^0.475.0",
-    "onnxruntime-node": "^1.20.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-router-dom": "^7.1.5",
-    "zustand": "^5.0.3"
+    "onnxruntime-node": "^1.20.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
@@ -31,7 +28,14 @@
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.24.2",
+    "ffmpeg-static": "^5.2.0",
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.5",
     "tailwindcss": "^4.0.0",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vite": "^6.0.0",
+    "zustand": "^5.0.3"
   }
 }

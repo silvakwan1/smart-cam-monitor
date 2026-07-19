@@ -264,7 +264,7 @@ export const CameraView: React.FC = () => {
   return (
     <div className={`flex-1 flex flex-col min-w-0 bg-slate-900/40 relative overflow-hidden shadow-inner ${
       isFullscreen 
-        ? 'rounded-none border-none w-screen h-screen' 
+        ? 'fixed inset-0 z-50 bg-black rounded-none border-none' 
         : 'rounded-2xl border border-slate-800'
     }`}>
       {/* Title Bar - hidden in fullscreen */}
@@ -326,7 +326,7 @@ export const CameraView: React.FC = () => {
             width={activeCamera ? activeCamera.width : 640}
             height={activeCamera ? activeCamera.height : 480}
             onDoubleClick={cameraStatus === 'connected' ? toggleFullscreen : undefined}
-            className={`w-full h-full object-contain ${cameraStatus === 'connected' ? 'cursor-pointer' : ''}`}
+            className={`max-w-full max-h-full ${cameraStatus === 'connected' ? 'cursor-pointer' : ''}`}
           />
         </div>
       </div>
