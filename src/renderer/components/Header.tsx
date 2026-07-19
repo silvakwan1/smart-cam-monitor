@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Tv, Settings, Cpu, HardDrive, ShieldAlert, Video, Camera, BrainCircuit, X } from 'lucide-react';
+import { Tv, Settings, Cpu, HardDrive, ShieldAlert, Video, Camera, BrainCircuit, X, Database } from 'lucide-react';
 import { useCameraStore } from '../stores/cameraStore';
 
 export const Header: React.FC = () => {
@@ -127,6 +127,19 @@ export const Header: React.FC = () => {
           >
             <Camera className="h-4 w-4" />
             <span>Capturas</span>
+          </NavLink>
+          <NavLink
+            to="/dataset"
+            className={({ isActive }) =>
+              `flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                isActive
+                  ? 'bg-gradient-to-r from-brand-primary/20 to-brand-secondary/20 text-brand-primary border border-brand-primary/30 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
+              }`
+            }
+          >
+            <Database className="h-4 w-4" />
+            <span>Dataset IA</span>
           </NavLink>
           <NavLink
             to="/settings"

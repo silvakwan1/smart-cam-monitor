@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setRecordingMode: (mode: RecordingMode) => ipcRenderer.invoke('camera:set-recording', mode),
   takeManualSnapshot: () => ipcRenderer.invoke('camera:take-snapshot'),
   startTrainer: (className: string, cameraSource?: string) => ipcRenderer.invoke('trainer:start', className, cameraSource),
+  getDatasetData: () => ipcRenderer.invoke('dataset:get-data'),
+  deleteDatasetImage: (path: string) => ipcRenderer.invoke('dataset:delete-image', path),
+  deleteDatasetClass: (classId: number, className: string) => ipcRenderer.invoke('dataset:delete-class', classId, className),
+  startDatasetTrainer: (config: { epochs: number; batch: number; device: string }) => ipcRenderer.invoke('dataset-trainer:start', config),
 
   // Event logger history
   getEvents: () => ipcRenderer.invoke('events:get'),
@@ -30,6 +34,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteMultipleRecordings: (paths: string[]) => ipcRenderer.invoke('recordings:delete-multiple', paths),
   trimRecording: (filePath: string, startTime: number, duration: number) => ipcRenderer.invoke('recordings:trim', filePath, startTime, duration),
   getRecordingDetections: (path: string) => ipcRenderer.invoke('recordings:get-detections', path),
+  processRecordingAi: (filePath: string, duration: number) => ipcRenderer.invoke('recordings:process-ai', filePath, duration),
+  onAiProgress: (callback: (event: any, data: { filePath: string; progress: number; error?: string }) => void) => {
+    const listener = (event: any, args: any) => callback(event, args);
+    ipcRenderer.on('recordings:ai-progress', listener);
+    return () => {
+      ipcRenderer.removeListener('recordings:ai-progress', listener);
+    };
+  },
 
   // Snapshots file management
   getSnapshots: () => ipcRenderer.invoke('snapshots:list'),

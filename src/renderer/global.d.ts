@@ -10,6 +10,13 @@ export interface IElectronAPI {
   setRecordingMode: (mode: RecordingMode) => Promise<{ success: boolean }>;
   takeManualSnapshot: () => Promise<{ success: boolean }>;
   startTrainer: (className: string, cameraSource?: string) => Promise<{ success: boolean; message?: string }>;
+  getDatasetData: () => Promise<{
+    classes: Array<{ id: number; name: string; count: number }>;
+    images: Array<{ name: string; path: string; url: string; classId: number; className: string; size: number; createdAt: number }>;
+  }>;
+  deleteDatasetImage: (path: string) => Promise<{ success: boolean }>;
+  deleteDatasetClass: (classId: number, className: string) => Promise<{ success: boolean }>;
+  startDatasetTrainer: (config: { epochs: number; batch: number; device: string }) => Promise<{ success: boolean; message?: string }>;
 
   getEvents: () => Promise<SystemEvent[]>;
   clearEvents: () => Promise<SystemEvent[]>;
@@ -23,6 +30,8 @@ export interface IElectronAPI {
   deleteMultipleRecordings: (paths: string[]) => Promise<{ success: boolean; deletedCount: number }>;
   trimRecording: (filePath: string, startTime: number, duration: number) => Promise<{ success: boolean; path: string }>;
   getRecordingDetections: (path: string) => Promise<any[]>;
+  processRecordingAi: (filePath: string, duration: number) => Promise<{ success: boolean; message?: string }>;
+  onAiProgress: (callback: (event: any, data: { filePath: string; progress: number; error?: string }) => void) => () => void;
 
   getSnapshots: () => Promise<any[]>;
   openSnapshotsFolder: () => Promise<{ success: boolean }>;

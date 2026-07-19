@@ -154,56 +154,59 @@ export class CameraManager {
       this.lastFpsCalcTime = now;
     }
 
-    // Convert JPEG frame to raw bitmap for motion detection and AI inference
-    // nativeImage handles scaling and decoding at native speeds
-    let rawBitmap: Buffer;
+    // 1. Decode JPEG using Electron's nativeImage
     try {
       const img = nativeImage.createFromBuffer(frameBuffer);
-      const resized = img.resize({ width: 640, height: 640 });
-      rawBitmap = resized.toBitmap();
+
+      // Run Motion Detection on a tiny 16x16 resize (extremely fast)
+      const motionImg = img.resize({ width: 16, height: 16 });
+      const motionBitmap = motionImg.toBitmap();
+      this.runMotionDetection(motionBitmap as unknown as Uint8Array, frameBuffer);
+
+      // 2. Trigger AI worker detection asynchronously if worker is ready and throttled (e.g. max 5 FPS)
+      const nowTime = Date.now();
+      const DETECTION_THROTTLE_MS = 200;
+      const canRunDetection = !this.detector.getInferenceStats().isBusy && (nowTime - this.lastInferenceStartTime >= DETECTION_THROTTLE_MS);
+
+      if (canRunDetection) {
+        this.lastInferenceStartTime = nowTime;
+
+        // Only scale to 640x640 when AI needs to process it, saving massive CPU power
+        const aiImg = img.resize({ width: 640, height: 640 });
+        const aiBitmap = aiImg.toBitmap();
+
+        this.detector.detect(aiBitmap)
+          .then((detections) => {
+            if (detections.length > 0 || this.activeDetections.length > 0) {
+              this.processAIResults(detections, frameBuffer);
+            }
+
+            // If video recording is active, save the detections with a relative timestamp
+            if (this.recorder.isActive() && this.recordingStartTime > 0) {
+              const relativeTime = (Date.now() - this.recordingStartTime) / 1000;
+              this.currentRecordingDetections.push({
+                time: relativeTime,
+                detections: detections.map(d => ({
+                  label: d.label,
+                  confidence: d.confidence,
+                  // Clamp bounding box to screen boundaries [0.0, 1.0] to prevent crashes or overflows
+                  box: {
+                    x: Math.max(0, Math.min(1, d.box.x)),
+                    y: Math.max(0, Math.min(1, d.box.y)),
+                    width: Math.max(0, Math.min(1, d.box.width)),
+                    height: Math.max(0, Math.min(1, d.box.height))
+                  }
+                }))
+              });
+            }
+          })
+          .catch((err) => {
+            console.error('[CameraManager] AI Inference error:', err);
+          });
+      }
     } catch (err) {
       console.error('[CameraManager] Native frame decode error:', err);
       return;
-    }
-
-    // 1. Run Pixel-Based Motion Detection (takes < 0.2ms)
-    this.runMotionDetection(rawBitmap as unknown as Uint8Array, frameBuffer);
-
-    // 2. Trigger AI worker detection asynchronously if worker is ready and throttled
-    const nowTime = Date.now();
-    const DETECTION_THROTTLE_MS = 200; // Run AI inference at max 5 FPS to conserve CPU
-    const canRunDetection = !this.detector.getInferenceStats().isBusy && (nowTime - this.lastInferenceStartTime >= DETECTION_THROTTLE_MS);
-
-    if (canRunDetection) {
-      this.lastInferenceStartTime = nowTime;
-      this.detector.detect(rawBitmap)
-        .then((detections) => {
-          if (detections.length > 0 || this.activeDetections.length > 0) {
-            this.processAIResults(detections, frameBuffer);
-          }
-
-          // If video recording is active, save the detections with a relative timestamp
-          if (this.recorder.isActive() && this.recordingStartTime > 0) {
-            const relativeTime = (Date.now() - this.recordingStartTime) / 1000;
-            this.currentRecordingDetections.push({
-              time: relativeTime,
-              detections: detections.map(d => ({
-                label: d.label,
-                confidence: d.confidence,
-                // Clamp bounding box to screen boundaries [0.0, 1.0] to prevent crashes or overflows
-                box: {
-                  x: Math.max(0, Math.min(1, d.box.x)),
-                  y: Math.max(0, Math.min(1, d.box.y)),
-                  width: Math.max(0, Math.min(1, d.box.width)),
-                  height: Math.max(0, Math.min(1, d.box.height))
-                }
-              }))
-            });
-          }
-        })
-        .catch((err) => {
-          console.error('[CameraManager] AI Inference error:', err);
-        });
     }
 
     // 3. Write frame to recorder if currently active
@@ -291,31 +294,15 @@ export class CameraManager {
     }
   }
 
-  private runMotionDetection(rgbaBuffer: Uint8Array, frameBuffer: Buffer): void {
-    // Downsample to 16x16 grid for instant comparison
-    const gridSize = 16;
-    const blockSize = 640 / gridSize;
-    const grid = new Array(gridSize * gridSize).fill(0);
-
-    for (let gy = 0; gy < gridSize; gy++) {
-      for (let gx = 0; gx < gridSize; gx++) {
-        let sum = 0;
-        const startX = gx * blockSize;
-        const startY = gy * blockSize;
-
-        for (let y = startY; y < startY + blockSize; y += 4) {
-          for (let x = startX; x < startX + blockSize; x += 4) {
-            const idx = (y * 640 + x) * 4;
-            const r = rgbaBuffer[idx];
-            const g = rgbaBuffer[idx + 1];
-            const b = rgbaBuffer[idx + 2];
-            const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-            sum += luminance;
-          }
-        }
-        const count = (blockSize / 4) * (blockSize / 4);
-        grid[gy * gridSize + gx] = sum / count;
-      }
+  private runMotionDetection(rgba16x16: Uint8Array, frameBuffer: Buffer): void {
+    // Process the tiny 16x16 image directly
+    const grid = new Array(256);
+    for (let i = 0; i < 256; i++) {
+      const idx = i * 4;
+      const r = rgba16x16[idx];
+      const g = rgba16x16[idx + 1];
+      const b = rgba16x16[idx + 2];
+      grid[i] = 0.299 * r + 0.587 * g + 0.114 * b;
     }
 
     if (!this.prevMotionGrid) {
@@ -323,13 +310,19 @@ export class CameraManager {
       return;
     }
 
-    let totalDiff = 0;
-    for (let i = 0; i < grid.length; i++) {
-      totalDiff += Math.abs(grid[i] - this.prevMotionGrid[i]);
+    let changedCells = 0;
+    const cellThreshold = 15.0; // Minimum luminance change per block (0-255)
+
+    for (let i = 0; i < 256; i++) {
+      const diff = Math.abs(grid[i] - this.prevMotionGrid[i]);
+      if (diff > cellThreshold) {
+        changedCells++;
+      }
     }
 
-    const averageDiff = totalDiff / grid.length;
-    const hasMotion = averageDiff > 12.0; // Difference threshold
+    // Motion is detected if at least 4 blocks change significantly (approx. 1.5% of the screen),
+    // but we ignore sudden global changes like camera exposure or flash of light (e.g. if > 85% of screen blocks change).
+    const hasMotion = changedCells >= 4 && changedCells < 220;
 
     this.prevMotionGrid = grid;
 

@@ -5,6 +5,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
 import { RecordingsPage } from './pages/RecordingsPage';
 import { SnapshotsPage } from './pages/SnapshotsPage';
+import { DatasetManager } from './pages/DatasetManager';
 
 const App: React.FC = () => {
   return (
@@ -19,6 +20,7 @@ const App: React.FC = () => {
             <Route path="/" element={<Dashboard />} />
             <Route path="/recordings" element={<RecordingsPage />} />
             <Route path="/snapshots" element={<SnapshotsPage />} />
+            <Route path="/dataset" element={<DatasetManager />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>

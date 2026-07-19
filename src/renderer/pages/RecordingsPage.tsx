@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Video, Trash2, FolderOpen, Calendar, Play, ChevronRight, AlertTriangle, RefreshCw, CheckSquare, Square, Pause, RotateCcw, ZoomIn, ZoomOut, Scissors, Eye, Clock, Activity, User, ShieldAlert, HelpCircle } from 'lucide-react';
+import { Video, Trash2, FolderOpen, Calendar, Play, ChevronRight, AlertTriangle, RefreshCw, CheckSquare, Square, Pause, RotateCcw, ZoomIn, ZoomOut, Scissors, Eye, Clock, Activity, User, ShieldAlert, HelpCircle, BrainCircuit } from 'lucide-react';
 import { SystemEvent } from '../../shared/types';
 
 interface RecordingFile {
@@ -30,13 +30,19 @@ export const RecordingsPage: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [wasPlayingBeforeScrub, setWasPlayingBeforeScrub] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState<SpeedOption>(1);
 
-  // Toggle option to show bounding box on playback
-  const [showDetections, setShowDetections] = useState(true);
+  // Toggle option to show bounding box on playback (Normal mode by default)
+  const [showDetections, setShowDetections] = useState(false);
   const [videoDetections, setVideoDetections] = useState<any[]>([]);
+  
+  // Background AI Scan Progress states
+  const [aiProgress, setAiProgress] = useState<Record<string, number>>({});
+  const [aiError, setAiError] = useState<Record<string, string>>({});
   
   // Zoom & Pan States
   const [zoomLevel, setZoomLevel] = useState(1); // 1x to 4x
@@ -100,6 +106,13 @@ export const RecordingsPage: React.FC = () => {
 
   // Fetch detections JSON when active video is loaded
   useEffect(() => {
+    // Keep video paused initially when selecting a new video
+    setIsPlaying(false);
+    setWasPlayingBeforeScrub(false);
+    if (videoRef.current) {
+      videoRef.current.pause();
+    }
+
     if (activeVideo) {
       window.electronAPI.getRecordingDetections(activeVideo.path)
         .then((data) => {
@@ -113,6 +126,68 @@ export const RecordingsPage: React.FC = () => {
       setVideoDetections([]);
     }
   }, [activeVideo]);
+
+  // Handle IPC background AI scan progress updates
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onAiProgress((event, data) => {
+      setAiProgress((prev) => ({
+        ...prev,
+        [data.filePath]: data.progress
+      }));
+
+      // If finished, load new detections
+      if (data.progress === 100) {
+        if (activeVideo && activeVideo.path === data.filePath) {
+          window.electronAPI.getRecordingDetections(activeVideo.path)
+            .then((data) => {
+              setVideoDetections(data || []);
+            })
+            .catch(console.error);
+        }
+      }
+
+      if (data.error) {
+        setAiError((prev) => ({
+          ...prev,
+          [data.filePath]: data.error || 'Erro no processamento'
+        }));
+      }
+    });
+
+    return unsubscribe;
+  }, [activeVideo]);
+
+  const startAiProcessing = async () => {
+    if (!activeVideo || duration === 0) return;
+    try {
+      setAiError((prev) => {
+        const next = { ...prev };
+        delete next[activeVideo.path];
+        return next;
+      });
+      setAiProgress((prev) => ({
+        ...prev,
+        [activeVideo.path]: 0
+      }));
+      await window.electronAPI.processRecordingAi(activeVideo.path, duration);
+    } catch (err) {
+      console.error(err);
+      setAiError((prev) => ({
+        ...prev,
+        [activeVideo.path]: err instanceof Error ? err.message : 'Erro ao iniciar varredura IA'
+      }));
+    }
+  };
+
+  // Automatically start AI scan if user changes display mode to 'Com Detecção' and no JSON tracker exists
+  useEffect(() => {
+    if (showDetections && activeVideo && videoDetections.length === 0 && duration > 0) {
+      const currentProgress = aiProgress[activeVideo.path];
+      if (currentProgress === undefined || currentProgress === -1) {
+        startAiProcessing();
+      }
+    }
+  }, [showDetections, activeVideo, videoDetections, duration]);
 
   // Update playbackRate on video element
   useEffect(() => {
@@ -206,18 +281,38 @@ export const RecordingsPage: React.FC = () => {
     });
   }, [currentTime, videoDetections, showDetections]);
 
+  // Proactively get and synchronize video duration
+  const syncDuration = () => {
+    if (videoRef.current) {
+      const d = videoRef.current.duration;
+      if (d && !isNaN(d) && isFinite(d) && d > 0) {
+        setDuration(d);
+        // Only set trim end if it was at default or uninitialized
+        setTrimEnd(d);
+      }
+    }
+  };
+
   // Keep track of current time progress
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
+      if (!isScrubbing) {
+        setCurrentTime(videoRef.current.currentTime);
+      }
+      // Proactively sync duration if state is uninitialized
+      if (duration === 0 || isNaN(duration) || !isFinite(duration)) {
+        syncDuration();
+      }
     }
   };
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
       const videoDuration = videoRef.current.duration || 0;
-      setDuration(videoDuration);
-      setTrimEnd(videoDuration);
+      if (videoDuration && !isNaN(videoDuration) && isFinite(videoDuration) && videoDuration > 0) {
+        setDuration(videoDuration);
+        setTrimEnd(videoDuration);
+      }
       setTrimStart(0);
     }
   };
@@ -318,13 +413,177 @@ export const RecordingsPage: React.FC = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Video timeline seek handler
-  const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!timelineRef.current || !videoRef.current || isTrimming) return;
+  // Video timeline seek and scrubbing handlers
+  const lastSeekTimeRef = useRef<number>(0);
+
+  const seekToPosition = (clientX: number) => {
+    if (!timelineRef.current || !videoRef.current) return;
+    
+    // Dynamically retrieve duration from video element if state hasn't updated yet
+    let currentDuration = duration;
+    if (currentDuration === 0 || isNaN(currentDuration) || !isFinite(currentDuration)) {
+      const d = videoRef.current.duration;
+      if (d && !isNaN(d) && isFinite(d) && d > 0) {
+        currentDuration = d;
+        setDuration(d);
+        setTrimEnd(d);
+      }
+    }
+
+    if (currentDuration === 0) return;
+
     const rect = timelineRef.current.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
+    const clickX = clientX - rect.left;
     const progress = Math.max(0, Math.min(1, clickX / rect.width));
-    videoRef.current.currentTime = progress * duration;
+    const targetTime = progress * currentDuration;
+
+    // Update React state instantly so visual handle/scrubber moves smoothly
+    setCurrentTime(targetTime);
+
+    // Throttle the actual video element seek (50ms interval) to prevent decoder overload/freeze
+    const now = Date.now();
+    if (now - lastSeekTimeRef.current > 50) {
+      videoRef.current.currentTime = targetTime;
+      lastSeekTimeRef.current = now;
+    }
+  };
+
+  const handleTimelineMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!timelineRef.current || !videoRef.current || isTrimming) return;
+    
+    // Remember playing state and pause the video element while scrubbing to prevent seek stuttering
+    if (isPlaying) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+      setWasPlayingBeforeScrub(true);
+    } else {
+      setWasPlayingBeforeScrub(false);
+    }
+
+    setIsScrubbing(true);
+    seekToPosition(e.clientX);
+  };
+
+  // Bind global windows mouse handlers when dragging timeline scrubber
+  useEffect(() => {
+    if (!isScrubbing) return;
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      seekToPosition(e.clientX);
+    };
+
+    const handleGlobalMouseUp = (e: MouseEvent) => {
+      setIsScrubbing(false);
+      
+      // Perform a final exact seek on release
+      if (timelineRef.current && videoRef.current) {
+        let currentDuration = duration;
+        if (currentDuration === 0 || isNaN(currentDuration) || !isFinite(currentDuration)) {
+          currentDuration = videoRef.current.duration || 0;
+        }
+        if (currentDuration > 0) {
+          const rect = timelineRef.current.getBoundingClientRect();
+          const clickX = e.clientX - rect.left;
+          const progress = Math.max(0, Math.min(1, clickX / rect.width));
+          videoRef.current.currentTime = progress * currentDuration;
+          setCurrentTime(progress * currentDuration);
+        }
+      }
+
+      // Resume playing if the video was active before scrubbing
+      if (wasPlayingBeforeScrub && videoRef.current) {
+        videoRef.current.play()
+          .then(() => setIsPlaying(true))
+          .catch(console.error);
+      }
+    };
+
+    window.addEventListener('mousemove', handleGlobalMouseMove);
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove);
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [isScrubbing, duration, wasPlayingBeforeScrub]);
+
+  // Generate ticks for hour divisions on the timeline
+  const getTimelineTicks = () => {
+    if (duration === 0) return [];
+    
+    let interval = 10;
+    if (duration <= 10) interval = 2;
+    else if (duration <= 30) interval = 5;
+    else if (duration <= 60) interval = 10;
+    else if (duration <= 120) interval = 20;
+    else if (duration <= 300) interval = 60; // 1 min
+    else if (duration <= 600) interval = 120; // 2 min
+    else if (duration <= 1800) interval = 300; // 5 min
+    else if (duration <= 3600) interval = 600; // 10 min
+    else interval = 1200; // 20 min
+    
+    const ticks = [];
+    for (let t = 0; t < duration; t += interval) {
+      ticks.push(t);
+    }
+    
+    // Add the final duration tick if it is not too close to the previous tick
+    const lastTick = ticks[ticks.length - 1];
+    if (lastTick === undefined || (duration - lastTick) > (interval * 0.4)) {
+      ticks.push(duration);
+    }
+    return ticks;
+  };
+
+  // Get absolute time tick label of the video (using recording start time)
+  const getAbsoluteTickLabel = (offsetSeconds: number) => {
+    if (startTimeMs === 0) return formatDuration(offsetSeconds);
+    const date = new Date(startTimeMs + offsetSeconds * 1000);
+    return date.toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  };
+
+  interface DetectionRange {
+    start: number;
+    end: number;
+    type: 'person' | 'vehicle' | 'other';
+  }
+
+  // Calculate contiguous detection ranges to draw highlights on the timeline
+  const getDetectionRanges = (): DetectionRange[] => {
+    if (!videoDetections || videoDetections.length === 0 || duration === 0) return [];
+    
+    // Sort detections by time
+    const sorted = [...videoDetections].sort((a, b) => a.time - b.time);
+    
+    const ranges: DetectionRange[] = [];
+    let currentRange: DetectionRange | null = null;
+    
+    const GAP_THRESHOLD = 1.5; // Merge detections within 1.5 seconds
+
+    for (const frame of sorted) {
+      if (!frame.detections || frame.detections.length === 0) continue;
+
+      const hasPerson = frame.detections.some((d: any) => d.label === 'person');
+      const hasVehicle = frame.detections.some((d: any) => ['car', 'truck', 'motorcycle', 'bicycle'].includes(d.label));
+      const type = hasPerson ? 'person' : (hasVehicle ? 'vehicle' : 'other');
+
+      if (!currentRange) {
+        currentRange = { start: frame.time, end: frame.time, type };
+      } else if (type === currentRange.type && (frame.time - currentRange.end) <= GAP_THRESHOLD) {
+        currentRange.end = frame.time;
+      } else {
+        ranges.push(currentRange);
+        currentRange = { start: frame.time, end: frame.time, type };
+      }
+    }
+    if (currentRange) {
+      ranges.push(currentRange);
+    }
+    return ranges;
   };
 
   // Panning drag handlers when zoomed in
@@ -375,9 +634,11 @@ export const RecordingsPage: React.FC = () => {
   // Get events that overlap with this video's timeline window
   const getOverlappingEvents = () => {
     if (!activeVideo || duration === 0 || !cameraId) return [];
-    const endTimeMs = startTimeMs + duration * 1000;
+    // Allow a 10-second buffer before the video starts and after it ends to catch triggering events!
+    const startTimeBufferMs = startTimeMs - 10000;
+    const endTimeBufferMs = startTimeMs + duration * 1000 + 10000;
     return allEvents.filter((evt) => {
-      return evt.cameraId === cameraId && evt.timestamp >= startTimeMs && evt.timestamp <= endTimeMs;
+      return evt.cameraId === cameraId && evt.timestamp >= startTimeBufferMs && evt.timestamp <= endTimeBufferMs;
     });
   };
 
@@ -548,6 +809,48 @@ export const RecordingsPage: React.FC = () => {
                 </div>
               ) : null}
 
+              {/* AI Processing Overlay progress indicator */}
+              {showDetections && activeVideo && (aiProgress[activeVideo.path] !== undefined && aiProgress[activeVideo.path] < 100) && (
+                <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md z-30 flex flex-col items-center justify-center space-y-4 p-6 select-none animate-in fade-in duration-200">
+                  <div className="relative">
+                    <div className="h-16 w-16 rounded-2xl bg-gradient-to-tr from-brand-secondary/30 to-brand-primary/30 flex items-center justify-center shadow-xl animate-pulse">
+                      <BrainCircuit className="h-8 w-8 text-brand-primary" />
+                    </div>
+                    {/* Ring loader */}
+                    <div className="absolute -inset-2 border-2 border-brand-primary border-t-transparent rounded-full animate-spin" />
+                  </div>
+                  
+                  <div className="text-center space-y-2">
+                    <h4 className="text-sm font-bold text-slate-100">Varredura de Inteligência Artificial</h4>
+                    <p className="text-xs text-slate-500 font-mono max-w-xs leading-relaxed">
+                      O detector YOLOv11 está analisando o vídeo em chunks de forma otimizada para identificar novos movimentos, pessoas e objetos.
+                    </p>
+                  </div>
+
+                  {aiError[activeVideo.path] ? (
+                    <div className="text-xs text-rose-450 bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-2.5 max-w-sm flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" />
+                      <span>{aiError[activeVideo.path]}</span>
+                    </div>
+                  ) : (
+                    <div className="w-64 flex flex-col items-center space-y-1.5 pt-2">
+                      <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-750">
+                        <div 
+                          className="h-full bg-gradient-to-r from-brand-primary to-brand-secondary transition-all duration-300"
+                          style={{ width: `${aiProgress[activeVideo.path] || 0}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between w-full text-[10px] text-slate-400 font-mono">
+                        <span>Processando IA...</span>
+                        <span className="font-bold text-brand-primary">
+                          {aiProgress[activeVideo.path] || 0}%
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Wrapper to scale canvas overlay exactly alongside the video tag */}
               <div 
                 className="relative max-h-full max-w-full flex items-center justify-center pointer-events-none select-none"
@@ -558,7 +861,6 @@ export const RecordingsPage: React.FC = () => {
                 <video
                   ref={videoRef}
                   src={activeVideo.url}
-                  autoPlay
                   onTimeUpdate={handleTimeUpdate}
                   onLoadedMetadata={handleLoadedMetadata}
                   className="max-h-full max-w-full object-contain pointer-events-none select-none"
@@ -597,8 +899,8 @@ export const RecordingsPage: React.FC = () => {
               {/* Seekbar track container */}
               <div 
                 ref={timelineRef}
-                onClick={handleTimelineClick}
-                className="h-4.5 bg-slate-950 border border-slate-850 rounded-lg relative cursor-pointer group flex items-center select-none"
+                onMouseDown={handleTimelineMouseDown}
+                className="h-5 bg-slate-950 border border-slate-850 rounded-lg relative cursor-pointer group flex items-center select-none"
               >
                 {/* Visual playback progress */}
                 <div 
@@ -606,10 +908,31 @@ export const RecordingsPage: React.FC = () => {
                   style={{ width: `${(currentTime / duration) * 100}%` }}
                 />
 
-                {/* Event Markers Overlay */}
+                {/* Detections Contiguous Bands Overlay */}
+                {duration > 0 && getDetectionRanges().map((range, idx) => {
+                  const leftPct = (range.start / duration) * 100;
+                  const widthPct = ((range.end - range.start) / duration) * 100;
+                  
+                  // Color bands: Rose for person, Violet for vehicle, Cyan/Emerald for other
+                  let colorClass = 'bg-emerald-500/25 border-emerald-400/40';
+                  if (range.type === 'person') colorClass = 'bg-rose-500/30 border-rose-400/45';
+                  else if (range.type === 'vehicle') colorClass = 'bg-violet-500/25 border-violet-400/40';
+
+                  return (
+                    <div
+                      key={`band-${idx}`}
+                      className={`absolute top-0 bottom-0 border-l border-r pointer-events-none z-10 ${colorClass}`}
+                      style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                      title={`${range.type === 'person' ? 'Pessoa Identificada' : range.type === 'vehicle' ? 'Veículo Identificado' : 'Objeto Identificado'}`}
+                    />
+                  );
+                })}
+
+                {/* Event Markers Overlay (discrete events) */}
                 {duration > 0 && overlappingEvents.map((evt) => {
-                  const relativeProgress = (evt.timestamp - startTimeMs) / (duration * 1000);
-                  if (relativeProgress < 0 || relativeProgress > 1) return null;
+                  let relativeProgress = (evt.timestamp - startTimeMs) / (duration * 1000);
+                  // Clamp to range [0, 1] so it fits on the visible timeline track
+                  relativeProgress = Math.max(0, Math.min(1, relativeProgress));
                   
                   // Color indicators: Cyan for motion_detected, purple/rose for person_detected
                   let colorClass = 'bg-brand-success shadow-brand-success/50';
@@ -623,7 +946,8 @@ export const RecordingsPage: React.FC = () => {
                         e.stopPropagation();
                         handleSeekToEvent(evt.timestamp);
                       }}
-                      className={`absolute top-0 bottom-0 w-1.5 z-20 border-r border-l border-slate-950 shadow-md transform -translate-x-1/2 hover:scale-x-[2.5] hover:z-30 hover:brightness-110 transition-all ${colorClass}`}
+                      className={`absolute top-0 bottom-0 w-1.5 z-20 border-r border-l border-slate-950 shadow-md transform -translate-x-1/2 hover:scale-x-[2.5] hover:z-30 hover:brightness-110 transition-all ${colorClass} cursor-pointer`}
+                      style={{ left: `${relativeProgress * 100}%` }}
                       title={`${evt.type === 'motion_detected' ? 'Movimento' : 'Pessoa'} - ${formatTime(evt.timestamp)}: ${evt.description}`}
                     />
                   );
@@ -631,7 +955,7 @@ export const RecordingsPage: React.FC = () => {
 
                 {/* Seek scrubber handle */}
                 <div 
-                  className="h-4 w-4 bg-white border-2 border-brand-primary rounded-full absolute -ml-2 top-0.5 shadow-md shadow-black/80 pointer-events-none"
+                  className="h-4 w-4 bg-white border-2 border-brand-primary rounded-full absolute -ml-2 top-0.5 shadow-md shadow-black/80 pointer-events-none z-30"
                   style={{ left: `${(currentTime / duration) * 100}%` }}
                 />
 
@@ -671,6 +995,29 @@ export const RecordingsPage: React.FC = () => {
                   </>
                 )}
               </div>
+
+              {/* Tracks / Hour Divisions Timeline Ruler */}
+              {duration > 0 && (
+                <div className="relative h-7 text-[9px] text-slate-500 font-mono select-none pointer-events-none mt-1 border-t border-slate-900/60 pt-1">
+                  {getTimelineTicks().map((tickTime) => {
+                    const pct = (tickTime / duration) * 100;
+                    return (
+                      <div 
+                        key={tickTime} 
+                        className="absolute transform -translate-x-1/2 flex flex-col items-center"
+                        style={{ left: `${pct}%` }}
+                      >
+                        {/* Tick mark indicator */}
+                        <div className="w-0.5 h-1 bg-slate-800" />
+                        {/* Time labels (Absolute hours of the day) */}
+                        <span className="mt-1 font-semibold text-slate-400">
+                          {getAbsoluteTickLabel(tickTime)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Trimming actions display info */}
               {isTrimming && (
@@ -722,7 +1069,7 @@ export const RecordingsPage: React.FC = () => {
                 {/* Display Mode Toggle: Normal Video vs Active Detection overlay */}
                 <div className="flex items-center space-x-2">
                   <span className="text-[10px] text-slate-500 font-mono uppercase">Modo de Exibição:</span>
-                  <div className="flex bg-slate-950 p-1 border border-slate-850 rounded-lg">
+                  <div className="flex items-center space-x-1.5 bg-slate-950 p-1 border border-slate-850 rounded-lg">
                     <button
                       onClick={() => setShowDetections(false)}
                       className={`text-[10px] font-sans font-bold px-3 py-1 rounded transition-all cursor-pointer ${
@@ -743,6 +1090,16 @@ export const RecordingsPage: React.FC = () => {
                     >
                       Com Detecção
                     </button>
+                    {showDetections && activeVideo && (
+                      <button
+                        onClick={startAiProcessing}
+                        disabled={aiProgress[activeVideo.path] !== undefined && aiProgress[activeVideo.path] < 100}
+                        className="p-1 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-brand-primary hover:border-brand-primary/50 disabled:opacity-50 transition-all cursor-pointer"
+                        title="Reanalisar vídeo com IA (Forçar Varredura)"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 

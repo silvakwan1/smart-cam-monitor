@@ -16,7 +16,8 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null;
 let detector: YoloDetector | null = null;
 let cameraManager: CameraManager | null = null;
-let trainerProcess: ChildProcess | null = null;
+let cameraTrainerProcess: ChildProcess | null = null;
+let datasetTrainerProcess: ChildProcess | null = null;
 
 // Persistence file paths in OS AppData directory
 const USER_DATA_PATH = app.getPath('userData');
@@ -117,6 +118,146 @@ function getTrainerExecutablePath() {
 
   return null;
 }
+
+function getDatasetTrainerExecutablePath() {
+  const packagedPath = path.join(process.resourcesPath, 'ai-engine', 'dataset_trainer.exe');
+  const devPath = path.join(PROJECT_DIR, 'ai-engine', 'dist', 'dataset_trainer.exe');
+
+  if (app.isPackaged && fs.existsSync(packagedPath)) {
+    return packagedPath;
+  }
+
+  if (fs.existsSync(devPath)) {
+    return devPath;
+  }
+
+  return null;
+}
+
+function parseDatasetYaml(filePath: string) {
+  if (!fs.existsSync(filePath)) {
+    return { names: {} as Record<number, string>, path: '', train: '', val: '' };
+  }
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const names: Record<number, string> = {};
+  let pathVal = '';
+  let trainVal = '';
+  let valVal = '';
+
+  let inNamesSection = false;
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    if (trimmed.startsWith('names:')) {
+      inNamesSection = true;
+      continue;
+    }
+
+    if (inNamesSection) {
+      const matchProperty = trimmed.match(/^([a-zA-Z_]+)\s*:/);
+      if (matchProperty && matchProperty[1] !== 'names') {
+        inNamesSection = false;
+      }
+    }
+
+    if (inNamesSection) {
+      const match = trimmed.match(/^['"]?(\d+)['"]?\s*:\s*['"]?([^'"]+)['"]?/);
+      if (match) {
+        names[parseInt(match[1], 10)] = match[2].trim();
+      }
+    } else {
+      const match = trimmed.match(/^([a-zA-Z_]+)\s*:\s*['"]?([^'"]+)['"]?/);
+      if (match) {
+        const key = match[1];
+        const val = match[2].trim();
+        if (key === 'path') pathVal = val;
+        else if (key === 'train') trainVal = val;
+        else if (key === 'val') valVal = val;
+      }
+    }
+  }
+  return { names, path: pathVal, train: trainVal, val: valVal };
+}
+
+function writeDatasetYaml(filePath: string, data: { names: Record<number, string>; path: string; train: string; val: string }) {
+  let content = 'names:\n';
+  const keys = Object.keys(data.names).map(Number).sort((a, b) => a - b);
+  for (const k of keys) {
+    content += `  ${k}: ${data.names[k]}\n`;
+  }
+  content += `path: ${data.path.replace(/\\/g, '/')}\n`;
+  content += `train: ${data.train}\n`;
+  content += `val: ${data.val}\n`;
+  fs.writeFileSync(filePath, content, 'utf-8');
+}
+
+function launchDatasetTrainerProcess(
+  scriptPath: string,
+  args: { epochs: number; batch: number; device: string; output: string }
+): Promise<ChildProcess> {
+  const trainerExecutablePath = getDatasetTrainerExecutablePath();
+  const trainerArgs = [
+    '--epochs', args.epochs.toString(),
+    '--batch', args.batch.toString(),
+    '--device', args.device,
+    '--output', args.output
+  ];
+
+  if (process.platform === 'win32') {
+    if (trainerExecutablePath) {
+      return new Promise((resolve, reject) => {
+        // Spawn executable in a new command prompt window to show progress logs
+        const child = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', trainerExecutablePath, ...trainerArgs], {
+          cwd: path.dirname(trainerExecutablePath),
+          windowsHide: false
+        });
+
+        child.once('spawn', () => resolve(child));
+        child.once('error', reject);
+      });
+    }
+
+    return new Promise((resolve, reject) => {
+      // Try py -3 first, then python, spawning inside a new CMD window
+      const child = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', 'py', '-3', scriptPath, ...trainerArgs], {
+        cwd: path.join(PROJECT_DIR, 'ai-engine'),
+        windowsHide: false
+      });
+
+      child.once('spawn', () => resolve(child));
+      child.once('error', () => {
+        const fallbackChild = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', 'python', scriptPath, ...trainerArgs], {
+          cwd: path.join(PROJECT_DIR, 'ai-engine'),
+          windowsHide: false
+        });
+        fallbackChild.once('spawn', () => resolve(fallbackChild));
+        fallbackChild.once('error', reject);
+      });
+    });
+  }
+
+  // Unix/Mac platforms
+  if (trainerExecutablePath) {
+    return new Promise((resolve, reject) => {
+      const child = spawn(trainerExecutablePath, trainerArgs, {
+        cwd: path.dirname(trainerExecutablePath)
+      });
+      child.once('spawn', () => resolve(child));
+      child.once('error', reject);
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('python3', [scriptPath, ...trainerArgs], {
+      cwd: path.join(PROJECT_DIR, 'ai-engine')
+    });
+    child.once('spawn', () => resolve(child));
+    child.once('error', reject);
+  });
+}
+
 
 function launchTrainerProcess(scriptPath: string, className: string, cameraSource?: string): Promise<ChildProcess> {
   const trainerExecutablePath = getTrainerExecutablePath();
@@ -305,9 +446,13 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', async () => {
   if (statsInterval) clearInterval(statsInterval);
-  if (trainerProcess && !trainerProcess.killed) {
-    trainerProcess.kill();
-    trainerProcess = null;
+  if (cameraTrainerProcess && !cameraTrainerProcess.killed) {
+    cameraTrainerProcess.kill();
+    cameraTrainerProcess = null;
+  }
+  if (datasetTrainerProcess && !datasetTrainerProcess.killed) {
+    datasetTrainerProcess.kill();
+    datasetTrainerProcess = null;
   }
   
   if (cameraManager) {
@@ -378,7 +523,7 @@ ipcMain.handle('camera:take-snapshot', async () => {
 });
 
 ipcMain.handle('trainer:start', async (event, className: string, cameraSource?: string) => {
-  if (trainerProcess && !trainerProcess.killed) {
+  if (cameraTrainerProcess && !cameraTrainerProcess.killed) {
     return { success: false, message: 'O treinador de IA ja esta em execucao.' };
   }
 
@@ -393,15 +538,234 @@ ipcMain.handle('trainer:start', async (event, className: string, cameraSource?: 
     throw new Error(`Treinador nao encontrado. Esperado camera_trainer.exe ou ${trainerPath}`);
   }
 
-  trainerProcess = await launchTrainerProcess(trainerPath, trimmedClassName, cameraSource);
+  cameraTrainerProcess = await launchTrainerProcess(trainerPath, trimmedClassName, cameraSource);
 
-  trainerProcess.on('close', () => {
-    trainerProcess = null;
+  cameraTrainerProcess.on('close', () => {
+    cameraTrainerProcess = null;
   });
 
-  trainerProcess.on('error', (err) => {
+  cameraTrainerProcess.on('error', (err) => {
     console.error('[Main] Failed to start AI trainer:', err);
-    trainerProcess = null;
+    cameraTrainerProcess = null;
+  });
+
+  return { success: true };
+});
+
+ipcMain.handle('dataset:get-data', async () => {
+  const datasetsDir = path.join(PROJECT_DIR, 'ai-engine', 'datasets');
+  const yamlPath = path.join(datasetsDir, 'dataset.yaml');
+  const { names } = parseDatasetYaml(yamlPath);
+
+  const imagesTrainDir = path.join(datasetsDir, 'images', 'train');
+  const labelsTrainDir = path.join(datasetsDir, 'labels', 'train');
+
+  const images: any[] = [];
+  const classCounts: Record<number, number> = {};
+
+  // Initialize counts for all classes in dataset.yaml
+  for (const idStr of Object.keys(names)) {
+    classCounts[parseInt(idStr, 10)] = 0;
+  }
+
+  if (fs.existsSync(imagesTrainDir)) {
+    try {
+      const files = await fs.promises.readdir(imagesTrainDir);
+      for (const file of files) {
+        const fileExt = path.extname(file).toLowerCase();
+        if (['.jpg', '.jpeg', '.png', '.bmp', '.webp'].includes(fileExt)) {
+          const filePath = path.join(imagesTrainDir, file);
+          const stat = await fs.promises.stat(filePath);
+
+          // Resolve class ID and Name
+          let classId = -1;
+          let className = 'unknown';
+
+          const capturedMatch = file.match(/^captured_([^_]+(?:_[^_]+)*)_(\d+)\.(?:jpe?g|png|webp|bmp)$/i);
+          if (capturedMatch) {
+            const parsedName = capturedMatch[1].toLowerCase();
+            for (const [idStr, name] of Object.entries(names)) {
+              if (name.toLowerCase() === parsedName) {
+                classId = parseInt(idStr, 10);
+                className = name;
+                break;
+              }
+            }
+          }
+
+          if (classId === -1) {
+            const labelFile = file.substring(0, file.lastIndexOf('.')) + '.txt';
+            const labelPath = path.join(labelsTrainDir, labelFile);
+            if (fs.existsSync(labelPath)) {
+              try {
+                const labelContent = await fs.promises.readFile(labelPath, 'utf-8');
+                const match = labelContent.trim().match(/^(\d+)/);
+                if (match) {
+                  classId = parseInt(match[1], 10);
+                  className = names[classId] || `class_${classId}`;
+                }
+              } catch (e) {
+                console.error('Error resolving image class via label:', e);
+              }
+            }
+          }
+
+          if (classId !== -1) {
+            classCounts[classId] = (classCounts[classId] || 0) + 1;
+          }
+
+          images.push({
+            name: file,
+            path: filePath,
+            url: `media://${filePath.replace(/\\/g, '/')}`,
+            size: stat.size,
+            createdAt: stat.birthtimeMs || stat.mtimeMs,
+            classId,
+            className
+          });
+        }
+      }
+    } catch (e) {
+      console.error('[Main] Failed to list train images:', e);
+    }
+  }
+
+  // Map to structure
+  const classesList = Object.entries(names).map(([idStr, name]) => {
+    const id = parseInt(idStr, 10);
+    return {
+      id,
+      name,
+      count: classCounts[id] || 0
+    };
+  });
+
+  // Sort images by date (newest first)
+  images.sort((a, b) => b.createdAt - a.createdAt);
+
+  return {
+    classes: classesList,
+    images
+  };
+});
+
+ipcMain.handle('dataset:delete-image', async (event, imagePath: string) => {
+  try {
+    const filename = path.basename(imagePath);
+    const datasetsDir = path.join(PROJECT_DIR, 'ai-engine', 'datasets');
+
+    // Resolve all 4 corresponding file paths
+    const trainImg = path.join(datasetsDir, 'images', 'train', filename);
+    const validImg = path.join(datasetsDir, 'images', 'valid', filename);
+
+    const txtFilename = filename.substring(0, filename.lastIndexOf('.')) + '.txt';
+    const trainLbl = path.join(datasetsDir, 'labels', 'train', txtFilename);
+    const validLbl = path.join(datasetsDir, 'labels', 'valid', txtFilename);
+
+    // Delete files if they exist
+    if (fs.existsSync(trainImg)) await fs.promises.unlink(trainImg);
+    if (fs.existsSync(validImg)) await fs.promises.unlink(validImg);
+    if (fs.existsSync(trainLbl)) await fs.promises.unlink(trainLbl);
+    if (fs.existsSync(validLbl)) await fs.promises.unlink(validLbl);
+
+    return { success: true };
+  } catch (err) {
+    console.error('[Main] Failed to delete dataset image:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('dataset:delete-class', async (event, classId: number, className: string) => {
+  try {
+    const datasetsDir = path.join(PROJECT_DIR, 'ai-engine', 'datasets');
+    const yamlPath = path.join(datasetsDir, 'dataset.yaml');
+
+    // 1. Delete matching images and labels
+    const folders = [
+      { img: path.join(datasetsDir, 'images', 'train'), lbl: path.join(datasetsDir, 'labels', 'train') },
+      { img: path.join(datasetsDir, 'images', 'valid'), lbl: path.join(datasetsDir, 'labels', 'valid') }
+    ];
+
+    for (const folder of folders) {
+      if (fs.existsSync(folder.img)) {
+        const files = await fs.promises.readdir(folder.img);
+        for (const file of files) {
+          const fileExt = path.extname(file).toLowerCase();
+          if (['.jpg', '.jpeg', '.png', '.bmp', '.webp'].includes(fileExt)) {
+            // Check if captured prefix matches or read label to verify class
+            let match = false;
+            const capturedMatch = file.match(/^captured_([^_]+(?:_[^_]+)*)_(\d+)\./i);
+            if (capturedMatch && capturedMatch[1].toLowerCase() === className.toLowerCase()) {
+              match = true;
+            } else {
+              const labelFile = file.substring(0, file.lastIndexOf('.')) + '.txt';
+              const labelPath = path.join(folder.lbl, labelFile);
+              if (fs.existsSync(labelPath)) {
+                try {
+                  const labelContent = await fs.promises.readFile(labelPath, 'utf-8');
+                  const classMatch = labelContent.trim().match(/^(\d+)/);
+                  if (classMatch && parseInt(classMatch[1], 10) === classId) {
+                    match = true;
+                  }
+                } catch (e) {
+                  // Ignore read error
+                }
+              }
+            }
+
+            if (match) {
+              const imgPath = path.join(folder.img, file);
+              const labelFile = file.substring(0, file.lastIndexOf('.')) + '.txt';
+              const lblPath = path.join(folder.lbl, labelFile);
+
+              if (fs.existsSync(imgPath)) await fs.promises.unlink(imgPath);
+              if (fs.existsSync(lblPath)) await fs.promises.unlink(lblPath);
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Remove class from dataset.yaml names dictionary
+    const yamlData = parseDatasetYaml(yamlPath);
+    if (yamlData.names && yamlData.names[classId] !== undefined) {
+      delete yamlData.names[classId];
+      writeDatasetYaml(yamlPath, yamlData);
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error('[Main] Failed to delete class:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('dataset-trainer:start', async (event, config: { epochs: number; batch: number; device: string }) => {
+  if (datasetTrainerProcess && !datasetTrainerProcess.killed) {
+    return { success: false, message: 'O treinador de IA ja esta em execucao.' };
+  }
+
+  const trainerPath = path.join(PROJECT_DIR, 'ai-engine', 'dataset_trainer.py');
+  const trainerExecutablePath = getDatasetTrainerExecutablePath();
+  if (!trainerExecutablePath && !fs.existsSync(trainerPath)) {
+    throw new Error(`Treinador de dataset nao encontrado. Esperado dataset_trainer.exe ou ${trainerPath}`);
+  }
+
+  // Start trainer process pointing to our active model path as the destination
+  datasetTrainerProcess = await launchDatasetTrainerProcess(trainerPath, {
+    epochs: config.epochs || 50,
+    batch: config.batch || 8,
+    device: config.device || 'auto',
+    output: generalSettings.modelPath
+  });
+
+  datasetTrainerProcess.on('close', () => {
+    datasetTrainerProcess = null;
+  });
+
+  datasetTrainerProcess.on('error', (err) => {
+    console.error('[Main] Failed to start Dataset trainer:', err);
+    datasetTrainerProcess = null;
   });
 
   return { success: true };
@@ -661,4 +1025,118 @@ ipcMain.handle('recordings:get-detections', async (event, filePath: string) => {
     }
   }
   return [];
+});
+
+const activeAiScans = new Map<string, boolean>();
+
+async function runVideoAiScan(filePath: string, durationSec: number, window: BrowserWindow | null) {
+  activeAiScans.set(filePath, true);
+
+  const ffmpegPath = getFFmpegPath();
+  const scanFps = 5; // Scan 5 frames per second
+  const totalFrames = Math.max(1, Math.round(durationSec * scanFps));
+
+  // Spawn ffmpeg to output raw RGBA frames at 640x640 at 5 FPS
+  const ffmpegArgs = [
+    '-i', filePath,
+    '-vf', `scale=640:640,fps=${scanFps}`,
+    '-f', 'image2pipe',
+    '-pix_fmt', 'rgba',
+    '-vcodec', 'rawvideo',
+    '-'
+  ];
+
+  const proc = spawn(ffmpegPath, ffmpegArgs);
+  const frameSize = 640 * 640 * 4; // 1,638,400 bytes
+
+  let bufferAccumulator = Buffer.alloc(0);
+  let frameIndex = 0;
+  const detectionsList: any[] = [];
+
+  // Sequential stream reading process to enforce backpressure and cap memory usage at ~1.6MB per frame
+  (async () => {
+    try {
+      for await (const chunk of proc.stdout) {
+        bufferAccumulator = Buffer.concat([bufferAccumulator, chunk]);
+        while (bufferAccumulator.length >= frameSize) {
+          const frameBuffer = bufferAccumulator.subarray(0, frameSize);
+          bufferAccumulator = bufferAccumulator.subarray(frameSize);
+
+          const timestamp = frameIndex / scanFps;
+          if (detector) {
+            try {
+              const detections = await detector.detect(frameBuffer);
+              if (detections && detections.length > 0) {
+                detectionsList.push({
+                  time: timestamp,
+                  detections: detections.map(d => ({
+                    label: d.label,
+                    confidence: d.confidence,
+                    box: d.box
+                  }))
+                });
+              }
+            } catch (err) {
+              console.error('[AI Scan] Detection error:', err);
+            }
+          }
+
+          frameIndex++;
+          const progress = Math.min(99, Math.round((frameIndex / totalFrames) * 100));
+          window?.webContents.send('recordings:ai-progress', { filePath, progress });
+        }
+      }
+    } catch (err) {
+      console.error('[AI Scan] Stream read error:', err);
+    }
+  })();
+
+  return new Promise<{ success: boolean }>((resolve, reject) => {
+    let stderr = '';
+    proc.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('close', async (code) => {
+      activeAiScans.delete(filePath);
+      if (code === 0 || code === null) {
+        const jsonPath = filePath.replace(/\.mp4$/i, '.json');
+        try {
+          await fs.promises.writeFile(jsonPath, JSON.stringify(detectionsList, null, 2));
+          console.log(`[AI Scan] Scan complete, saved detections to: ${jsonPath}`);
+          window?.webContents.send('recordings:ai-progress', { filePath, progress: 100 });
+          resolve({ success: true });
+        } catch (e) {
+          console.error('[AI Scan] Failed to save JSON:', e);
+          reject(e);
+        }
+      } else {
+        console.error('[AI Scan] FFmpeg error output:', stderr);
+        reject(new Error(`FFmpeg exited with code ${code}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      activeAiScans.delete(filePath);
+      reject(err);
+    });
+  });
+}
+
+ipcMain.handle('recordings:process-ai', async (event, filePath: string, duration: number) => {
+  if (activeAiScans.has(filePath)) {
+    return { success: false, message: 'Processamento ja em andamento para este video.' };
+  }
+
+  if (!detector) {
+    throw new Error('Detector de IA nao inicializado.');
+  }
+
+  // Run the async scan loop in background
+  runVideoAiScan(filePath, duration, mainWindow).catch((err) => {
+    console.error(`[AI Scan] Failed to run AI scan on ${filePath}:`, err);
+    mainWindow?.webContents.send('recordings:ai-progress', { filePath, progress: -1, error: err.message });
+  });
+
+  return { success: true };
 });
