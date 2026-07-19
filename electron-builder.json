@@ -1,0 +1,21 @@
+{
+  "appId": "com.smartcam.monitor",
+  "productName": "SmartCam Monitor",
+  "directories": {
+    "output": "dist-package"
+  },
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/ffmpeg-static/**/*",
+    "**/node_modules/onnxruntime-node/**/*"
+  ],
+  "win": {
+    "icon": "build/icon.ico"
+  },
+  "mac": {
+    "icon": "build/icon.icns"
+  },
+  "linux": {
+    "icon": "build/icons"
+  }
+}

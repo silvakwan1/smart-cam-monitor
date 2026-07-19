@@ -1,0 +1,18 @@
+# YOLOv8 / YOLOv11 Dataset Configuration file
+path: ../datasets  # dataset root dir
+train: train/images  # train images (relative to path)
+val: valid/images  # val images (relative to path)
+test: test/images # test images (optional)
+
+# Classes
+names:
+  0: person
+  1: bicycle
+  2: car
+  3: motorcycle
+  4: airplane
+  5: bus
+  6: train
+  7: truck
+  8: boat
+  9: traffic light

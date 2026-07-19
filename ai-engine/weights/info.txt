@@ -1,0 +1,5 @@
+Place your YOLOv8 or YOLOv11 weights files here.
+Supported weights files:
+- yolo11n.pt (Pre-trained PyTorch weights)
+- yolo11n.onnx (ONNX Runtime model weights)
+- custom.onnx (Your custom trained model weights exported for fast CPU/GPU inference)

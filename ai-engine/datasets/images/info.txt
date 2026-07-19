@@ -1,0 +1,1 @@
+Place your YOLO training images (.jpg, .png) here.

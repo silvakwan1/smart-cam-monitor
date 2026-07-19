@@ -1,0 +1,1 @@
+Place XML, JSON, or CSV labels from tools like Label Studio or CVAT here before conversion.

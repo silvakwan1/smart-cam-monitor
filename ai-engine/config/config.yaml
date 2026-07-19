@@ -1,0 +1,33 @@
+model:
+  type: "yolo"
+  weights: "weights/yolo11n.onnx"
+  device: "auto" # options: auto, cuda, directml, cpu
+  confidence: 0.50
+  iou: 0.45
+
+tracker:
+  enabled: true
+  type: "bytetrack"
+  max_age: 30
+
+camera:
+  width: 1280
+  height: 720
+  fps: 30
+
+communication:
+  active_channels: ["stdin", "http", "websocket"] # channels to boot
+  http_host: "127.0.0.1"
+  http_port: 8000
+  websocket_port: 8001
+  ipc_pipe_name: "smartcam_ai_pipe"
+
+zones:
+  - name: "Restricted Area A"
+    polygon: [[100, 100], [500, 100], [500, 600], [100, 600]]
+  - name: "Entrada"
+    polygon: [[600, 200], [1200, 200], [1200, 700], [600, 700]]
+
+virtual_lines:
+  - name: "Gate 1 Line"
+    line_coords: [[200, 400], [1000, 400]] # start [x, y], end [x, y]

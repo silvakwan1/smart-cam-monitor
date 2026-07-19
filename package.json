@@ -1,0 +1,37 @@
+{
+  "name": "smart-cam-monitor",
+  "version": "1.0.0",
+  "description": "Sistema de Monitoramento Inteligente com Electron, React, TypeScript e IA",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n \"renderer,main\" -c \"cyan,green\" \"npm run dev:renderer\" \"npm run dev:main\"",
+    "dev:renderer": "vite",
+    "dev:main": "node scripts/dev-main.js",
+    "build": "npm run build:renderer && npm run build:main",
+    "build:renderer": "vite build",
+    "build:main": "node scripts/build-main.js",
+    "package": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0",
+    "lucide-react": "^0.475.0",
+    "onnxruntime-node": "^1.20.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.5",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.13.1",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.3"
+  }
+}
