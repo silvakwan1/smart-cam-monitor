@@ -100,8 +100,21 @@ export function registerDatasetHandlers() {
     });
     setDatasetTrainerProcess(proc);
 
-    proc.on('close', () => {
+    proc.on('close', (code) => {
       setDatasetTrainerProcess(null);
+
+      // Se o treinamento terminou com sucesso, copiar o modelo para resources/
+      // para que o proximo build ja inclua o modelo treinado automaticamente
+      if (code === 0 && generalSettings.modelPath && fs.existsSync(generalSettings.modelPath)) {
+        const resourcesModelPath = path.join(PROJECT_DIR, 'resources', 'yolo11n.onnx');
+        try {
+          fs.mkdirSync(path.dirname(resourcesModelPath), { recursive: true });
+          fs.copyFileSync(generalSettings.modelPath, resourcesModelPath);
+          console.log(`[Main] Modelo treinado copiado para build: ${resourcesModelPath}`);
+        } catch (copyErr) {
+          console.error('[Main] Falha ao copiar modelo para resources/:', copyErr);
+        }
+      }
     });
 
     proc.on('error', (err) => {

@@ -14,6 +14,10 @@
   ],
   "extraResources": [
     {
+      "from": "resources/yolo11n.onnx",
+      "to": "yolo11n.onnx"
+    },
+    {
       "from": "node_modules/ffmpeg-static/ffmpeg.exe",
       "to": "bin/ffmpeg.exe"
     },

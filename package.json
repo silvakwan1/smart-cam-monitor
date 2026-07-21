@@ -10,10 +10,11 @@
     "build": "npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
     "build:main": "node scripts/build-main.js",
-    "build:trainer": "py -3 -m PyInstaller --onefile --name camera_trainer --distpath ai-engine/dist --workpath ai-engine/build --specpath ai-engine ai-engine/camera_trainer.py",
-    "build:dataset-trainer": "py -3 -m PyInstaller --onefile --name dataset_trainer --distpath ai-engine/dist --workpath ai-engine/build --specpath ai-engine ai-engine/dataset_trainer.py",
+    "build:trainer": "py -3 -m PyInstaller --distpath ai-engine/dist --workpath ai-engine/build ai-engine/camera_trainer.spec",
+    "build:dataset-trainer": "py -3 -m PyInstaller --distpath ai-engine/dist --workpath ai-engine/build ai-engine/dataset_trainer.spec",
+    "train": "py -3 ai-engine/dataset_trainer.py --output resources/yolo11n.onnx --no-pause",
     "package": "npm run build && electron-builder",
-    "package:all": "npm run build:trainer && npm run build:dataset-trainer && npm run build && electron-builder"
+    "package:all": "npm run build:trainer && npm run build:dataset-trainer && npm run build && node scripts/copy-model.js && electron-builder"
   },
   "dependencies": {
     "onnxruntime-node": "^1.20.0"

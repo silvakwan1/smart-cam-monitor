@@ -1,6 +1,6 @@
 names:
   0: person
-  10: rosto
+  1: rosto
 path: C:/Users/silva/OneDrive/Documentos/can/ai-engine/datasets
 train: images/train
 val: images/valid

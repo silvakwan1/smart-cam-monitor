@@ -217,8 +217,10 @@ def train_model(args: argparse.Namespace) -> None:
     try:
         # pyrefly: ignore [missing-import]
         from ultralytics import YOLO
-    except ImportError:
-        fail("biblioteca ultralytics nao encontrada dentro do executavel/ambiente.")
+    except ImportError as e:
+        import traceback
+        traceback.print_exc()
+        fail(f"biblioteca ultralytics nao encontrada dentro do executavel/ambiente. Detalhes: {e}")
 
     dataset_yaml = resolve_path(args.config)
     weights_path = resolve_path(args.weights)

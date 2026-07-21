@@ -349,9 +349,10 @@ def run_training(yaml_path, electron_onnx_dest):
     try:
         from ultralytics import YOLO
         import torch
-    except ImportError:
-        print("\n[Erro] Bibliotecas 'ultralytics' ou 'torch' não encontradas!")
-        print("Instale usando: pip install ultralytics torch")
+    except ImportError as e:
+        import traceback
+        traceback.print_exc()
+        print(f"\n[Erro] Bibliotecas 'ultralytics' ou 'torch' não encontradas! Detalhes: {e}")
         return
 
     print("\n" + "="*50)
